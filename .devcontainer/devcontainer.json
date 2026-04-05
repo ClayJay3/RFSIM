@@ -1,0 +1,17 @@
+{
+  "name": "RF-GPU-Sim",
+  "build": {
+    "dockerfile": "./Dockerfile"
+  },
+  "runArgs": ["--gpus", "all", "--net", "host"],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}

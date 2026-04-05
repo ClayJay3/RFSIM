@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU RF Propagation Simulator</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #111; color: white; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        #ui-panel {
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(20, 20, 20, 0.85); padding: 20px; border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); backdrop-filter: blur(10px);
+            width: 320px; border: 1px solid #333;
+        }
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        .control-group { margin-bottom: 15px; }
+        label { display: block; font-size: 0.85rem; margin-bottom: 5px; color: #aaa; }
+        input[type="number"], input[type="text"] {
+            width: 100%; padding: 8px; background: #222; border: 1px solid #444;
+            color: #fff; border-radius: 6px; box-sizing: border-box;
+        }
+        button {
+            width: 100%; padding: 12px; background: #0066cc; color: white;
+            border: none; border-radius: 6px; cursor: pointer; font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background: #0052a3; }
+        #loading { display: none; margin-top: 10px; font-size: 0.9rem; color: #00ffcc; text-align: center; }
+        
+        #legend {
+            position: absolute; bottom: 20px; right: 20px; z-index: 10;
+            background: rgba(20, 20, 20, 0.85); padding: 15px; border-radius: 8px;
+            border: 1px solid #333;
+        }
+        .gradient-bar {
+            width: 200px; height: 20px; border-radius: 4px;
+            background: linear-gradient(to right, transparent, blue, cyan, yellow, red);
+            margin-bottom: 5px;
+        }
+        .legend-labels { display: flex; justify-content: space-between; font-size: 0.8rem; color: #ccc; }
+    </style>
+    <!-- Include Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <h2>RF Parameters</h2>
+        <div class="control-group">
+            <label>Location (Lat, Lon)</label>
+            <div style="display: flex; gap: 10px;">
+                <input type="number" id="lat" value="37.7749" step="0.0001">
+                <input type="number" id="lon" value="-122.4194" step="0.0001">
+            </div>
+        </div>
+        <div class="control-group">
+            <label>Simulation Radius (m)</label>
+            <input type="number" id="radius" value="1000" step="100">
+        </div>
+        <div class="control-group">
+            <label>Tx Frequency (MHz)</label>
+            <input type="number" id="freq" value="900" step="100">
+        </div>
+        <div class="control-group">
+            <label>Tx Height (m AGL)</label>
+            <input type="number" id="tx_h" value="30" step="1">
+        </div>
+        <div class="control-group">
+            <label>Tx Power (dBm)</label>
+            <input type="number" id="tx_p" value="43" step="1">
+        </div>
+        <div class="control-group">
+            <label>Antenna Gain (dBi)</label>
+            <input type="number" id="tx_gain" value="18" step="1">
+        </div>
+        <div class="control-group">
+            <label>Azimuth (deg, 0=N, 90=E)</label>
+            <input type="number" id="tx_az" value="180" step="1">
+        </div>
+        <div class="control-group">
+            <label>Downtilt (deg, negative=down)</label>
+            <input type="number" id="tx_el" value="-2" step="1">
+        </div>
+        <div class="control-group">
+            <label>3dB Beamwidth (deg)</label>
+            <input type="number" id="beamwidth" value="65" step="1">
+        </div>
+        <button onclick="runSimulation()">Run CUDA Simulation</button>
+        <div id="loading">Running Ray Launching & Bouncing...</div>
+    </div>
+
+    <div id="legend">
+        <div style="margin-bottom: 5px; font-size: 0.9rem;">Rx Power (dBm)</div>
+        <div class="gradient-bar"></div>
+        <div class="legend-labels">
+            <span>&lt;-100</span>
+            <span>-85</span>
+            <span>-70</span>
+            <span>-55</span>
+            <span>&gt;-40</span>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // Three.js Setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+        
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 10000);
+        camera.position.set(0, 800, 1500);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x606060);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(1000, 2000, 1000);
+        scene.add(dirLight);
+
+        let terrainMesh = null;
+        let txMarker = null;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Handle Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Mapping dBm to Color
+        function dbmToColor(dbm) {
+            if (dbm <= -100) return [20, 20, 20, 255]; // Dark grey for no signal instead of transparent
+            
+            // Normalize -100 to -40
+            let t = (dbm + 100) / 60;
+            if (t > 1) t = 1;
+            if (t < 0) t = 0;
+
+            let r, g, b;
+            if (t < 0.33) {
+                r = 0; g = Math.floor(t * 3 * 255); b = 255;
+            } else if (t < 0.66) {
+                let t2 = (t - 0.33) * 3;
+                r = Math.floor(t2 * 255); g = 255; b = Math.floor((1 - t2) * 255);
+            } else {
+                let t3 = (t - 0.66) * 3;
+                r = 255; g = Math.floor((1 - t3) * 255); b = 0;
+            }
+            return [r, g, b, 255]; // Opaque colors
+        }
+
+        async function runSimulation() {
+            document.getElementById('loading').style.display = 'block';
+            
+            const payload = {
+                lat: parseFloat(document.getElementById('lat').value),
+                lon: parseFloat(document.getElementById('lon').value),
+                radius: parseFloat(document.getElementById('radius').value),
+                freq_mhz: parseFloat(document.getElementById('freq').value),
+                tx_height: parseFloat(document.getElementById('tx_h').value),
+                tx_power: parseFloat(document.getElementById('tx_p').value),
+                tx_gain: parseFloat(document.getElementById('tx_gain').value),
+                tx_azimuth: parseFloat(document.getElementById('tx_az').value),
+                tx_elevation: parseFloat(document.getElementById('tx_el').value),
+                beamwidth: parseFloat(document.getElementById('beamwidth').value)
+            };
+
+            try {
+                const response = await fetch('/api/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                renderResults(data, payload);
+            } catch (error) {
+                console.error("Simulation failed:", error);
+                alert("Failed to connect to simulation server.");
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        function renderResults(data, params) {
+            // 1. Clear Old Data
+            if (terrainMesh) scene.remove(terrainMesh);
+            if (txMarker) scene.remove(txMarker);
+
+            // 2. Generate Texture from Heatmap Array
+            const w = data.grid_w;
+            const h = data.grid_h;
+            const texData = new Uint8Array(w * h * 4);
+            
+            for (let i = 0; i < data.heatmap_dbm.length; i++) {
+                const color = dbmToColor(data.heatmap_dbm[i]);
+                texData[i * 4]     = color[0]; // R
+                texData[i * 4 + 1] = color[1]; // G
+                texData[i * 4 + 2] = color[2]; // B
+                texData[i * 4 + 3] = color[3]; // A
+            }
+
+            const texture = new THREE.DataTexture(texData, w, h, THREE.RGBAFormat);
+            // Use LinearFilter to blend the pixel blocks together into a smooth heatmap
+            texture.magFilter = THREE.LinearFilter;
+            texture.minFilter = THREE.LinearFilter;
+            texture.needsUpdate = true;
+
+            // 3. Build Terrain Mesh Geometry WITH UV Coordinates
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            const uvs = [];
+            
+            const r = params.radius;
+
+            data.mesh.forEach(tri => {
+                // Add physical vertices
+                vertices.push(...tri.v0);
+                vertices.push(...tri.v1);
+                vertices.push(...tri.v2);
+
+                // Calculate UVs to stretch the texture perfectly over the mesh bounds
+                // Converts X and Z world positions (ranging from -r to +r) into UV 0.0 to 1.0 space
+                uvs.push((tri.v0[0] + r) / (2 * r), (tri.v0[2] + r) / (2 * r));
+                uvs.push((tri.v1[0] + r) / (2 * r), (tri.v1[2] + r) / (2 * r));
+                uvs.push((tri.v2[0] + r) / (2 * r), (tri.v2[2] + r) / (2 * r));
+            });
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+            geometry.computeVertexNormals();
+
+            // 4. Apply Texture Directly to Terrain Material
+            const material = new THREE.MeshPhongMaterial({ 
+                map: texture,       // Set the heatmap as the texture map
+                color: 0xffffff,    // Keep base color white so it doesn't tint the heatmap
+                wireframe: false,   // Turn off wireframe for a solid look
+                side: THREE.DoubleSide 
+            });
+            
+            terrainMesh = new THREE.Mesh(geometry, material);
+            scene.add(terrainMesh);
+
+            // 5. Add Tx Marker
+            const markerGeom = new THREE.CylinderGeometry(10, 10, params.tx_height, 16);
+            // Changed marker to white so it contrasts against the red "hot" RF zone
+            const markerMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); 
+            txMarker = new THREE.Mesh(markerGeom, markerMat);
+            
+            let baseHeight = data.mesh.length > 0 ? data.mesh[Math.floor(data.mesh.length/2)].v0[1] : 0;
+            txMarker.position.set(0, baseHeight + params.tx_height / 2, 0);
+
+            // Add yellow 3D Arrow Helper to show antenna direction
+            const az_rad = params.tx_azimuth * (Math.PI / 180);
+            const el_rad = params.tx_elevation * (Math.PI / 180);
+            // Z is North, X is East in our engine mapping
+            const dir = new THREE.Vector3(
+                Math.sin(az_rad) * Math.cos(el_rad),
+                Math.sin(el_rad),
+                Math.cos(az_rad) * Math.cos(el_rad)
+            ).normalize();
+            
+            const arrowHelper = new THREE.ArrowHelper(dir, new THREE.Vector3(0, params.tx_height/2, 0), 200, 0xffff00, 40, 20);
+            txMarker.add(arrowHelper);
+
+            scene.add(txMarker);
+        }
+    </script>
+</body>
+</html>
