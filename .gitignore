@@ -10,6 +10,11 @@
 # Build files
 build/
 
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
 # Precompiled Headers
 *.gch
 *.pch

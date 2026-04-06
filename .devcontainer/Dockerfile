@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     libasio-dev \
     libboost-system-dev \
     libboost-thread-dev \
+    libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
