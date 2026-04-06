@@ -7,14 +7,13 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <gdal_priv.h>
+#include <ogr_spatialref.h>
 
 struct Point3D { float e, n, a; int cls; };
 
-// Function to pull LiDAR from your custom SQLite DB and build a 3D Voxel Grid
-bool build_voxel_grid(
-    float center_e, float center_n, float radius, float cell_size,
-    std::vector<uint8_t>& voxel_data, VoxelGrid& grid_info, std::vector<float>& surface_heightmap) 
-{
+// Helper to get DB connection safely and prevent duplication
+sqlite3* get_db_connection() {
     sqlite3* db;
     // Check current directory first, EXPLICITLY requesting Read-Only access to avoid Docker permission errors
     int rc = sqlite3_open_v2("terrain.db", &db, SQLITE_OPEN_READONLY, nullptr);
@@ -28,13 +27,23 @@ bool build_voxel_grid(
                 sqlite3_close(db);
             }
             std::cerr << "[ERROR] Please ensure terrain.db is located in the project root directory!" << std::endl;
-            return false;
+            return nullptr;
         } else {
             std::cout << "[INFO] Successfully opened ../terrain.db (root directory) in Read-Only mode." << std::endl;
         }
     } else {
         std::cout << "[INFO] Successfully opened terrain.db in Read-Only mode." << std::endl;
     }
+    return db;
+}
+
+// Function to pull LiDAR from your custom SQLite DB and build a 3D Voxel Grid
+bool build_voxel_grid(
+    float center_e, float center_n, float radius, float cell_size,
+    std::vector<uint8_t>& voxel_data, VoxelGrid& grid_info, std::vector<float>& surface_heightmap) 
+{
+    sqlite3* db = get_db_connection();
+    if (!db) return false;
 
     // Utilizing the R-Tree virtual index for blazing-fast spatial bounding-box lookups
     std::string q = "SELECT p.easting, p.northing, p.altitude, p.class_code "
@@ -119,6 +128,7 @@ bool build_voxel_grid(
 }
 
 int main() {
+    GDALAllRegister(); // Initialize GDAL for coordinate transformations
     crow::SimpleApp app;
 
     CROW_ROUTE(app, "/")([]() {
@@ -132,17 +142,140 @@ int main() {
         return res;
     });
 
+    CROW_ROUTE(app, "/api/default_location").methods(crow::HTTPMethod::GET)([]() {
+        sqlite3* db = get_db_connection();
+        if (!db) return crow::response(500, "Database not found");
+
+        // Efficiently find an approximate geographic center of the dataset.
+        // Full table scans (MIN/MAX) take minutes on hundreds of millions of points without an index.
+        // Instead, we instantly query MAX(id), sample 500 evenly spaced points, and find their center in < 5ms.
+        
+        sqlite3_stmt* stmt_max;
+        long long max_id = 0;
+        if (sqlite3_prepare_v2(db, "SELECT MAX(id) FROM ProcessedLiDARPoints", -1, &stmt_max, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt_max) == SQLITE_ROW) {
+                max_id = sqlite3_column_int64(stmt_max, 0);
+            }
+            sqlite3_finalize(stmt_max);
+        }
+
+        double easting = 0, northing = 0;
+
+        if (max_id > 0) {
+            std::string q_center;
+            
+            if (max_id <= 1000) {
+                // If the dataset is tiny, just do a full B-Tree calculation
+                q_center = "SELECT (MIN(easting) + MAX(easting)) / 2.0, (MIN(northing) + MAX(northing)) / 2.0 FROM ProcessedLiDARPoints";
+            } else {
+                // Generate 500 spaced IDs across the dataset
+                std::stringstream in_clause;
+                long long step = max_id / 500;
+                for (int i = 1; i <= 500; i++) {
+                    in_clause << (i * step);
+                    if (i < 500) in_clause << ",";
+                }
+                
+                // Fetch the bounds of only those 500 specific B-Tree branches
+                q_center = "SELECT (MIN(easting) + MAX(easting)) / 2.0, (MIN(northing) + MAX(northing)) / 2.0 "
+                           "FROM ProcessedLiDARPoints WHERE id IN (" + in_clause.str() + ")";
+            }
+
+            sqlite3_stmt* stmt_center;
+            if (sqlite3_prepare_v2(db, q_center.c_str(), -1, &stmt_center, nullptr) == SQLITE_OK) {
+                if (sqlite3_step(stmt_center) == SQLITE_ROW && sqlite3_column_type(stmt_center, 0) != SQLITE_NULL) {
+                    easting = sqlite3_column_double(stmt_center, 0);
+                    northing = sqlite3_column_double(stmt_center, 1);
+                }
+                sqlite3_finalize(stmt_center);
+            }
+        }
+
+        if (easting == 0 && northing == 0) {
+            sqlite3_close(db);
+            return crow::response(404, "No data in database");
+        }
+
+        // Get the UTM Zone Label (Assuming the dataset falls inside a single UTM zone)
+        std::string q_zone = "SELECT label FROM Zones LIMIT 1";
+        sqlite3_stmt* stmt_zone;
+        std::string label = "";
+        if (sqlite3_prepare_v2(db, q_zone.c_str(), -1, &stmt_zone, nullptr) == SQLITE_OK) {
+            if (sqlite3_step(stmt_zone) == SQLITE_ROW) {
+                const unsigned char* text = sqlite3_column_text(stmt_zone, 0);
+                if (text) label = reinterpret_cast<const char*>(text);
+            }
+            sqlite3_finalize(stmt_zone);
+        }
+        
+        sqlite3_close(db);
+
+        // Parse Zone Database Label (e.g., "15N")
+        int zone = 15;
+        bool is_north = true;
+        char hem = 'N';
+        if (!label.empty()) {
+            hem = label.back();
+            is_north = (hem == 'N' || hem == 'n');
+            std::string zone_str = label.substr(0, label.size() - 1);
+            try { zone = std::stoi(zone_str); } catch(...) {}
+        }
+
+        // Project UTM back to GPS
+        OGRSpatialReference utm_srs;
+        utm_srs.SetWellKnownGeogCS("WGS84");
+        utm_srs.SetUTM(zone, is_north);
+
+        OGRSpatialReference wgs84_srs;
+        wgs84_srs.SetWellKnownGeogCS("WGS84");
+        wgs84_srs.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER); // Force X=Lon, Y=Lat for safety
+
+        OGRCoordinateTransformation *poCT = OGRCreateCoordinateTransformation(&utm_srs, &wgs84_srs);
+        double lon = easting;
+        double lat = northing;
+        if (poCT) {
+            poCT->Transform(1, &lon, &lat);
+            OCTDestroyCoordinateTransformation(poCT);
+        }
+
+        crow::json::wvalue res;
+        res["lat"] = lat;
+        res["lng"] = lon;
+        return crow::response(res);
+    });
+
     CROW_ROUTE(app, "/api/simulate").methods(crow::HTTPMethod::POST)([](const crow::request& req) {
         auto body = crow::json::load(req.body);
         if (!body) return crow::response(400, "Invalid JSON");
 
         try {
-            // New Input: Easting / Northing to match your LiDAR DB
-            float easting = body.has("easting") ? body["easting"].d() : 500000.0;
-            float northing = body.has("northing") ? body["northing"].d() : 4000000.0;
+            // New Input: Use standard Lat/Lng coords
+            double lat = body.has("lat") ? body["lat"].d() : 38.0;
+            double lng = body.has("lng") ? body["lng"].d() : -91.0;
             float radius = body.has("radius") ? body["radius"].d() : 100.0;
             float voxel_res = body.has("resolution") ? body["resolution"].d() : 2.0; // 2m voxels
             
+            // Auto-calculate the UTM Zone
+            int zone = std::floor((lng + 180.0) / 6.0) + 1;
+            bool is_north = lat >= 0.0;
+
+            OGRSpatialReference wgs84_srs;
+            wgs84_srs.SetWellKnownGeogCS("WGS84");
+            wgs84_srs.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
+
+            OGRSpatialReference utm_srs;
+            utm_srs.SetWellKnownGeogCS("WGS84");
+            utm_srs.SetUTM(zone, is_north);
+
+            // Translate GPS Input to UTM for the Voxel grid
+            OGRCoordinateTransformation *poCT = OGRCreateCoordinateTransformation(&wgs84_srs, &utm_srs);
+            double easting = lng;
+            double northing = lat;
+            if (poCT) {
+                poCT->Transform(1, &easting, &northing);
+                OCTDestroyCoordinateTransformation(poCT);
+            }
+
             float freq = body.has("freq_mhz") ? body["freq_mhz"].d() * 1e6 : 900e6;
             float tx_h = body.has("tx_height") ? body["tx_height"].d() : 10.0;
             float tx_p = body.has("tx_power") ? body["tx_power"].d() : 43.0;
@@ -192,6 +325,12 @@ int main() {
             
             res["surface_heights"] = surface_mesh;
             res["heatmap_dbm"] = std::vector<float>(rx_power_dbm.begin(), rx_power_dbm.end());
+
+            // Provide the web-ui with the computed UTM values so it can accurately stitch the satellite map
+            res["easting"] = easting;
+            res["northing"] = northing;
+            res["zone"] = zone;
+            res["hem"] = is_north ? "N" : "S";
 
             return crow::response(res);
         } catch (const std::exception& e) {

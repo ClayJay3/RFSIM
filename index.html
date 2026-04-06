@@ -53,20 +53,10 @@
         
         <div id="ui-controls">
             <div class="control-group">
-                <label>Location (UTM Easting, Northing)</label>
+                <label>Location (Latitude, Longitude)</label>
                 <div style="display: flex; gap: 10px;">
-                    <input type="number" id="easting" value="519307" step="1">
-                    <input type="number" id="northing" value="4252958" step="1">
-                </div>
-            </div>
-            <div class="control-group">
-                <label>UTM Zone & Hemisphere</label>
-                <div style="display: flex; gap: 10px;">
-                    <input type="number" id="utm_zone" value="15" step="1" title="UTM Zone Number">
-                    <select id="utm_hem" style="width: 100%;">
-                        <option value="N">North</option>
-                        <option value="S">South</option>
-                    </select>
+                    <input type="number" id="lat" value="38.0" step="0.000001">
+                    <input type="number" id="lng" value="-91.0" step="0.000001">
                 </div>
             </div>
             <div class="control-group">
@@ -92,7 +82,7 @@
                 <input type="range" id="heatmap-opacity" min="0" max="1" step="0.1" value="0.7" oninput="updateOpacity(this.value)">
             </div>
 
-            <button onclick="runSimulation()">Run Volumetric Simulation</button>
+            <button id="sim-btn" onclick="runSimulation()">Run Volumetric Simulation</button>
             <div id="loading">Voxelizing LiDAR & Raymarching...</div>
         </div>
     </div>
@@ -126,6 +116,28 @@
 
         let terrainMesh = null, txMarker = null;
         let heatmapMesh = null; 
+
+        window.onload = async () => {
+            const simBtn = document.getElementById('sim-btn');
+            simBtn.innerText = "Locating Dataset Center...";
+            simBtn.disabled = true;
+            simBtn.style.opacity = "0.5";
+
+            try {
+                const res = await fetch('/api/default_location');
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('lat').value = data.lat.toFixed(6);
+                    document.getElementById('lng').value = data.lng.toFixed(6);
+                }
+            } catch (e) {
+                console.error("Failed to fetch default location", e);
+            } finally {
+                simBtn.innerText = "Run Volumetric Simulation";
+                simBtn.disabled = false;
+                simBtn.style.opacity = "1.0";
+            }
+        };
 
         function toggleMenu() {
             const controls = document.getElementById('ui-controls');
@@ -237,8 +249,8 @@
         async function runSimulation() {
             document.getElementById('loading').style.display = 'block';
             const payload = {
-                easting: parseFloat(document.getElementById('easting').value),
-                northing: parseFloat(document.getElementById('northing').value),
+                lat: parseFloat(document.getElementById('lat').value),
+                lng: parseFloat(document.getElementById('lng').value),
                 radius: parseFloat(document.getElementById('radius').value),
                 resolution: parseFloat(document.getElementById('resolution').value),
                 freq_mhz: parseFloat(document.getElementById('freq').value),
@@ -250,22 +262,37 @@
                 beamwidth: parseFloat(document.getElementById('beamwidth').value)
             };
 
-            const zone = parseInt(document.getElementById('utm_zone').value);
-            const hem = document.getElementById('utm_hem').value;
-            const projStr = `+proj=utm +zone=${zone} ${hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
-            
-            let satTileData = null;
             try {
-                satTileData = await fetchStitchedSatellite(payload, projStr);
-            } catch(e) {
-                console.error("Failed to fetch satellite tiles", e);
-            }
-
-            try {
+                // First, run the simulation. The backend will convert Lat/Lng to UTM and return it in the response.
                 const response = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if(!response.ok) { alert(await response.text()); return; }
+                const data = await response.json();
                 
-                renderResults(await response.json(), payload, satTileData);
+                // Now build the proj string with the returned UTM Zone
+                const projStr = `+proj=utm +zone=${data.zone} ${data.hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
+                
+                // Fetch the satellite tiles using the exact UTM bounds computed by the backend C++ Engine
+                let satTileData = null;
+                try {
+                    satTileData = await fetchStitchedSatellite({
+                        easting: data.easting,
+                        northing: data.northing,
+                        radius: payload.radius
+                    }, projStr);
+                } catch(e) {
+                    console.error("Failed to fetch satellite tiles", e);
+                }
+                
+                // Pass the backend's explicit projected coordinates into the 3D renderer
+                renderResults(data, {
+                    easting: data.easting, 
+                    northing: data.northing, 
+                    radius: payload.radius,
+                    tx_height: payload.tx_height,
+                    tx_azimuth: payload.tx_azimuth,
+                    tx_elevation: payload.tx_elevation
+                }, satTileData);
+
             } catch (error) {
                 alert("Simulation failed. Make sure the server is running.");
             } finally {
