@@ -9,9 +9,29 @@
         #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
         #ui-panel { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(20, 20, 20, 0.85); padding: 20px; border-radius: 12px; width: 320px; border: 1px solid #333; max-height: 90vh; overflow-y: auto;}
         h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        
+        /* Collapsible Menu Styles */
+        #ui-controls {
+            transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out;
+            overflow: hidden;
+            max-height: 1200px; /* Large enough to hold all controls */
+            opacity: 1;
+            margin-top: 15px;
+        }
+        #ui-controls.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin-top: 0;
+        }
+        #collapse-icon {
+            font-size: 0.8rem;
+            color: #00ffcc;
+            transition: transform 0.3s ease;
+        }
+
         .control-group { margin-bottom: 12px; }
         label { display: block; font-size: 0.85rem; margin-bottom: 5px; color: #aaa; }
-        input[type="number"] { width: 100%; padding: 8px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
+        input[type="number"], input[type="text"], input[type="password"], select { width: 100%; padding: 8px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
         button { width: 100%; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
         button:hover { background: #0052a3; }
         #loading { display: none; margin-top: 10px; font-size: 0.9rem; color: #00ffcc; text-align: center; }
@@ -19,39 +39,62 @@
         .gradient-bar { width: 200px; height: 20px; border-radius: 4px; background: linear-gradient(to right, transparent, blue, cyan, yellow, red); margin-bottom: 5px; }
         .legend-labels { display: flex; justify-content: space-between; font-size: 0.8rem; color: #ccc; }
     </style>
+    <!-- Include Three.js and Proj4js for coordinate conversion -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
 </head>
 <body>
 
     <div id="ui-panel">
-        <h2>LiDAR RF Voxel Engine</h2>
-        <div class="control-group">
-            <label>Location (UTM Easting, Northing)</label>
-            <div style="display: flex; gap: 10px;">
-                <!-- Put an exact coordinate from your database here to test -->
-                <input type="number" id="easting" value="519307" step="1">
-                <input type="number" id="northing" value="4252958" step="1">
+        <h2 onclick="toggleMenu()" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; margin-bottom: 0;">
+            LiDAR RF Voxel Engine <span id="collapse-icon">▼</span>
+        </h2>
+        
+        <div id="ui-controls">
+            <div class="control-group">
+                <label>Location (UTM Easting, Northing)</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="number" id="easting" value="519307" step="1">
+                    <input type="number" id="northing" value="4252958" step="1">
+                </div>
             </div>
+            <div class="control-group">
+                <label>UTM Zone & Hemisphere</label>
+                <div style="display: flex; gap: 10px;">
+                    <input type="number" id="utm_zone" value="15" step="1" title="UTM Zone Number">
+                    <select id="utm_hem" style="width: 100%;">
+                        <option value="N">North</option>
+                        <option value="S">South</option>
+                    </select>
+                </div>
+            </div>
+            <div class="control-group">
+                <label>Simulation Radius (m)</label>
+                <input type="number" id="radius" value="150" step="50">
+            </div>
+            <div class="control-group">
+                <label>Voxel Resolution (m)</label>
+                <input type="number" id="resolution" value="2.0" step="0.5">
+            </div>
+            <hr style="border-color:#444; margin:15px 0;">
+            <div class="control-group"><label>Tx Frequency (MHz)</label><input type="number" id="freq" value="900"></div>
+            <div class="control-group"><label>Tx Height (m AGL)</label><input type="number" id="tx_h" value="10"></div>
+            <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="43"></div>
+            <div class="control-group"><label>Antenna Gain (dBi)</label><input type="number" id="tx_gain" value="18"></div>
+            <div class="control-group"><label>Azimuth (deg)</label><input type="number" id="tx_az" value="180"></div>
+            <div class="control-group"><label>Downtilt (deg)</label><input type="number" id="tx_el" value="-5"></div>
+            <div class="control-group"><label>3dB Beamwidth</label><input type="number" id="beamwidth" value="65"></div>
+            
+            <hr style="border-color:#444; margin:15px 0;">
+            <div class="control-group">
+                <label>Heatmap Opacity: <span id="opacity-val">0.7</span></label>
+                <input type="range" id="heatmap-opacity" min="0" max="1" step="0.1" value="0.7" oninput="updateOpacity(this.value)">
+            </div>
+
+            <button onclick="runSimulation()">Run Volumetric Simulation</button>
+            <div id="loading">Voxelizing LiDAR & Raymarching...</div>
         </div>
-        <div class="control-group">
-            <label>Simulation Radius (m)</label>
-            <input type="number" id="radius" value="150" step="50">
-        </div>
-        <div class="control-group">
-            <label>Voxel Resolution (m)</label>
-            <input type="number" id="resolution" value="2.0" step="0.5">
-        </div>
-        <hr style="border-color:#444; margin:15px 0;">
-        <div class="control-group"><label>Tx Frequency (MHz)</label><input type="number" id="freq" value="900"></div>
-        <div class="control-group"><label>Tx Height (m AGL)</label><input type="number" id="tx_h" value="10"></div>
-        <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="43"></div>
-        <div class="control-group"><label>Antenna Gain (dBi)</label><input type="number" id="tx_gain" value="18"></div>
-        <div class="control-group"><label>Azimuth (deg)</label><input type="number" id="tx_az" value="180"></div>
-        <div class="control-group"><label>Downtilt (deg)</label><input type="number" id="tx_el" value="-5"></div>
-        <div class="control-group"><label>3dB Beamwidth</label><input type="number" id="beamwidth" value="65"></div>
-        <button onclick="runSimulation()">Run Volumetric Simulation</button>
-        <div id="loading">Voxelizing LiDAR & Raymarching...</div>
     </div>
 
     <div id="legend">
@@ -82,10 +125,31 @@
         scene.add(dirLight);
 
         let terrainMesh = null, txMarker = null;
+        let heatmapMesh = null; 
+
+        function toggleMenu() {
+            const controls = document.getElementById('ui-controls');
+            const icon = document.getElementById('collapse-icon');
+            
+            controls.classList.toggle('collapsed');
+            
+            if (controls.classList.contains('collapsed')) {
+                icon.innerText = '▶';
+            } else {
+                icon.innerText = '▼';
+            }
+        }
 
         function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
         animate();
         window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+        function updateOpacity(val) {
+            document.getElementById('opacity-val').innerText = val;
+            if (heatmapMesh && heatmapMesh.material) {
+                heatmapMesh.material.opacity = parseFloat(val);
+            }
+        }
 
         function dbmToColor(dbm) {
             if (dbm <= -100) return [30, 30, 30, 255]; 
@@ -95,6 +159,79 @@
             else if (t < 0.66) { let t2 = (t - 0.33) * 3; r = Math.floor(t2 * 255); g = 255; b = Math.floor((1 - t2) * 255); }
             else { let t3 = (t - 0.66) * 3; r = 255; g = Math.floor((1 - t3) * 255); b = 0; }
             return [r, g, b, 255];
+        }
+
+        async function fetchStitchedSatellite(payload, projStr) {
+            function lngLatToTile(lng, lat, z) {
+                const n = Math.pow(2, z);
+                const x = Math.floor(n * ((lng + 180) / 360));
+                const latRad = lat * Math.PI / 180;
+                const y = Math.floor(n * (1 - (Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI)) / 2);
+                return {x, y};
+            }
+
+            function tileToLngLat(x, y, z) {
+                const n = Math.pow(2, z);
+                const lng = x / n * 360 - 180;
+                const n2 = Math.PI - 2 * Math.PI * y / n;
+                const lat = 180 / Math.PI * Math.atan(0.5 * (Math.exp(n2) - Math.exp(-n2)));
+                return [lng, lat];
+            }
+
+            // Get bounding box in Lat/Lng
+            const tl_lnglat = proj4(projStr, 'WGS84', [payload.easting - payload.radius, payload.northing + payload.radius]);
+            const br_lnglat = proj4(projStr, 'WGS84', [payload.easting + payload.radius, payload.northing - payload.radius]);
+
+            // Find optimal zoom level that keeps tile count reasonable (max 5x5 grid = 25 tiles)
+            let z = 21;
+            let tlTile, brTile;
+            while(z > 0) {
+                tlTile = lngLatToTile(tl_lnglat[0], tl_lnglat[1], z);
+                brTile = lngLatToTile(br_lnglat[0], br_lnglat[1], z);
+                const widthTiles = brTile.x - tlTile.x + 1;
+                const heightTiles = brTile.y - tlTile.y + 1;
+                if (widthTiles * heightTiles <= 25) break; 
+                z--;
+            }
+
+            const widthTiles = brTile.x - tlTile.x + 1;
+            const heightTiles = brTile.y - tlTile.y + 1;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = widthTiles * 256;
+            canvas.height = heightTiles * 256;
+            const ctx = canvas.getContext('2d');
+
+            const fetchPromises = [];
+            for (let x = tlTile.x; x <= brTile.x; x++) {
+                for (let y = tlTile.y; y <= brTile.y; y++) {
+                    fetchPromises.push(new Promise((resolve) => {
+                        const img = new Image();
+                        img.crossOrigin = "Anonymous"; // Request CORS bypass to prevent canvas tainting in WebGL
+                        img.onload = () => {
+                            ctx.drawImage(img, (x - tlTile.x) * 256, (y - tlTile.y) * 256);
+                            resolve();
+                        };
+                        img.onerror = () => resolve(); // Silently fail missing tiles and leave grid blank
+                        img.src = `https://mt1.google.com/vt/lyrs=y&x=${x}&y=${y}&z=${z}`;
+                    }));
+                }
+            }
+            await Promise.all(fetchPromises);
+
+            // Calculate precise UTM bounds of the stitched canvas
+            const canvas_tl_lnglat = tileToLngLat(tlTile.x, tlTile.y, z);
+            const canvas_br_lnglat = tileToLngLat(brTile.x + 1, brTile.y + 1, z);
+
+            const canvas_tl_utm = proj4('WGS84', projStr, canvas_tl_lnglat);
+            const canvas_br_utm = proj4('WGS84', projStr, canvas_br_lnglat);
+
+            return {
+                canvas: canvas,
+                canvas_bl_utm: [canvas_tl_utm[0], canvas_br_utm[1]], // Bottom-Left UTM coordinates
+                canvasWidthUTM: canvas_br_utm[0] - canvas_tl_utm[0],
+                canvasHeightUTM: canvas_tl_utm[1] - canvas_br_utm[1]
+            };
         }
 
         async function runSimulation() {
@@ -113,54 +250,142 @@
                 beamwidth: parseFloat(document.getElementById('beamwidth').value)
             };
 
+            const zone = parseInt(document.getElementById('utm_zone').value);
+            const hem = document.getElementById('utm_hem').value;
+            const projStr = `+proj=utm +zone=${zone} ${hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
+            
+            let satTileData = null;
+            try {
+                satTileData = await fetchStitchedSatellite(payload, projStr);
+            } catch(e) {
+                console.error("Failed to fetch satellite tiles", e);
+            }
+
             try {
                 const response = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if(!response.ok) { alert(await response.text()); return; }
-                renderResults(await response.json(), payload);
+                
+                renderResults(await response.json(), payload, satTileData);
             } catch (error) {
-                alert("Simulation failed.");
+                alert("Simulation failed. Make sure the server is running.");
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
         }
 
-        function renderResults(data, params) {
+        function renderResults(data, params, satTileData = null) {
             if (terrainMesh) scene.remove(terrainMesh);
             if (txMarker) scene.remove(txMarker);
 
-            // 1. Build Texture
-            const texData = new Uint8Array(data.grid_w * data.grid_h * 4);
-            for (let i = 0; i < data.heatmap_dbm.length; i++) {
-                const color = dbmToColor(data.heatmap_dbm[i]);
-                texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; texData[i * 4 + 2] = color[2]; texData[i * 4 + 3] = color[3];
-            }
-            const texture = new THREE.DataTexture(texData, data.grid_w, data.grid_h, THREE.RGBAFormat);
-            texture.magFilter = THREE.LinearFilter; texture.minFilter = THREE.LinearFilter;
-            texture.needsUpdate = true;
-
-            // 2. Build Extruded Voxel Surface Mesh
             const geom = new THREE.PlaneGeometry(params.radius * 2, params.radius * 2, data.grid_w - 1, data.grid_h - 1);
             geom.rotateX(-Math.PI / 2);
 
             const pos = geom.attributes.position.array;
             for (let i = 0; i < data.surface_heights.length; i++) {
-                // PlaneGeometry vertices align row-by-row, matching our array directly!
                 pos[i * 3 + 1] = data.surface_heights[i] - data.min_alt; 
             }
             geom.computeVertexNormals();
 
-            const mat = new THREE.MeshPhongMaterial({ map: texture, color: 0xffffff, side: THREE.DoubleSide });
-            terrainMesh = new THREE.Mesh(geom, mat);
+            // 1. Base Layer: Satellite Imagery
+            let satTexture;
+            if (satTileData) {
+                satTexture = new THREE.CanvasTexture(satTileData.canvas);
+                satTexture.encoding = THREE.sRGBEncoding;
+                
+                // Align texture exactly to the 3D mesh by calculating the relative offset/scale
+                const mesh_bl_utm = [params.easting - params.radius, params.northing - params.radius];
+                const offsetX = (mesh_bl_utm[0] - satTileData.canvas_bl_utm[0]) / satTileData.canvasWidthUTM;
+                const offsetY = (mesh_bl_utm[1] - satTileData.canvas_bl_utm[1]) / satTileData.canvasHeightUTM;
+                const repeatX = (params.radius * 2) / satTileData.canvasWidthUTM;
+                const repeatY = (params.radius * 2) / satTileData.canvasHeightUTM;
+
+                satTexture.repeat.set(repeatX, repeatY);
+                satTexture.offset.set(offsetX, offsetY);
+            } else {
+                const canvas = document.createElement('canvas');
+                canvas.width = 512; canvas.height = 512;
+                const ctx = canvas.getContext('2d');
+                for(let x=0; x<512; x+=8) {
+                    for(let y=0; y<512; y+=8) {
+                        ctx.fillStyle = `rgb(${20 + Math.random()*20}, ${60 + Math.random()*40}, ${20 + Math.random()*20})`;
+                        ctx.fillRect(x, y, 8, 8);
+                    }
+                }
+                satTexture = new THREE.CanvasTexture(canvas);
+                satTexture.wrapS = satTexture.wrapT = THREE.RepeatWrapping;
+                satTexture.repeat.set(4, 4);
+            }
+
+            const satMat = new THREE.MeshPhongMaterial({ map: satTexture, color: 0xffffff, side: THREE.DoubleSide });
+            terrainMesh = new THREE.Mesh(geom, satMat);
             scene.add(terrainMesh);
 
-            // 3. Add Antenna Marker
+
+            // 2. Overlay Layer 1: RF Heatmap Texture
+            const texData = new Uint8Array(data.grid_w * data.grid_h * 4);
+            for (let i = 0; i < data.heatmap_dbm.length; i++) {
+                if (data.heatmap_dbm[i] <= -119.0) {
+                    texData[i * 4] = 0; texData[i * 4 + 1] = 0; texData[i * 4 + 2] = 0; texData[i * 4 + 3] = 0;
+                } else {
+                    const color = dbmToColor(data.heatmap_dbm[i]);
+                    texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; texData[i * 4 + 2] = color[2]; texData[i * 4 + 3] = color[3];
+                }
+            }
+            const heatmapTex = new THREE.DataTexture(texData, data.grid_w, data.grid_h, THREE.RGBAFormat);
+            heatmapTex.magFilter = THREE.LinearFilter; heatmapTex.minFilter = THREE.LinearFilter;
+            heatmapTex.needsUpdate = true;
+
+            const currentOpacity = parseFloat(document.getElementById('heatmap-opacity').value);
+            const heatmapMat = new THREE.MeshPhongMaterial({ 
+                map: heatmapTex, 
+                color: 0xffffff, 
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: currentOpacity,
+                depthWrite: false, 
+                polygonOffset: true,
+                polygonOffsetFactor: -1, 
+                polygonOffsetUnits: -1
+            });
+            
+            heatmapMesh = new THREE.Mesh(geom, heatmapMat);
+            terrainMesh.add(heatmapMesh);
+
+            // 3. Overlay Layer 2: 1-meter Grid
+            const gridCanvas = document.createElement('canvas');
+            gridCanvas.width = 128;
+            gridCanvas.height = 128;
+            const ctx = gridCanvas.getContext('2d');
+            ctx.fillStyle = 'rgba(0,0,0,0)';
+            ctx.fillRect(0, 0, 128, 128);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'; 
+            ctx.lineWidth = 4; 
+            ctx.strokeRect(0, 0, 128, 128);
+
+            const gridTex = new THREE.CanvasTexture(gridCanvas);
+            gridTex.wrapS = THREE.RepeatWrapping;
+            gridTex.wrapT = THREE.RepeatWrapping;
+            gridTex.repeat.set(params.radius * 2, params.radius * 2);
+            gridTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+            const gridMat = new THREE.MeshBasicMaterial({
+                map: gridTex,
+                transparent: true,
+                depthWrite: false, 
+                polygonOffset: true,
+                polygonOffsetFactor: -2, 
+                polygonOffsetUnits: -2
+            });
+
+            const gridMesh = new THREE.Mesh(geom, gridMat);
+            terrainMesh.add(gridMesh);
+
+            // 4. Add Antenna Marker
             txMarker = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, params.tx_height), new THREE.MeshBasicMaterial({ color: 0xffffff }));
             let centerIdx = Math.floor(data.grid_h/2) * data.grid_w + Math.floor(data.grid_w/2);
             let groundH = data.surface_heights[centerIdx] - data.min_alt;
             txMarker.position.set(0, groundH + params.tx_height / 2, 0);
 
-            // Invert the X and Z components so the WebGL Right-Handed coordinates
-            // visually match the mathematical RF engine's mapping!
             const dir = new THREE.Vector3(
                 -Math.sin(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180),
                 Math.sin(params.tx_elevation*Math.PI/180),
