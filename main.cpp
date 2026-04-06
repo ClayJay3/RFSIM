@@ -7,10 +7,15 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <random>
 #include <gdal_priv.h>
 #include <ogr_spatialref.h>
 
 struct Point3D { float e, n, a; int cls; };
+
+struct RayPath {
+    std::vector<std::vector<float>> points; // {easting, altitude, northing}
+};
 
 // Helper to get DB connection safely and prevent duplication
 sqlite3* get_db_connection() {
@@ -125,6 +130,103 @@ bool build_voxel_grid(
     }
 
     return true;
+}
+
+// ------------------------------------------------------------------
+// Real-time Visualizer CPU Raymarcher
+// Safely calculates 1000 ray paths purely for Web UI animation
+// ------------------------------------------------------------------
+std::vector<RayPath> generate_visualization_rays(
+    const SimParams& params, 
+    const VoxelGrid& grid, 
+    const std::vector<uint8_t>& voxel_data, 
+    int num_rays = 1000) 
+{
+    std::vector<RayPath> paths;
+    std::mt19937 gen(42); 
+    std::uniform_real_distribution<float> dis_angle(-params.beamwidth_rad / 2.0f, params.beamwidth_rad / 2.0f);
+    
+    float base_az = params.tx_azimuth_deg * (M_PI / 180.0f);
+    float base_el = params.tx_elevation_deg * (M_PI / 180.0f);
+
+    for (int i = 0; i < num_rays; ++i) {
+        RayPath path;
+        
+        // Scatter direction based on beamwidth
+        float az = base_az + dis_angle(gen);
+        float el = base_el + dis_angle(gen);
+        
+        // Standard UTM mapping: X=East, Y=Altitude, Z=North
+        float dir_x = sin(az) * cos(el);
+        float dir_y = sin(el);
+        float dir_z = cos(az) * cos(el);
+        
+        float cur_x = params.tx_x;
+        float cur_y = params.tx_y;
+        float cur_z = params.tx_z;
+        
+        path.points.push_back({cur_x, cur_y, cur_z});
+
+        for (int bounce = 0; bounce < params.max_bounces; ++bounce) {
+            float step = grid.cell_size * 0.2f; 
+            float t = 0;
+            float max_t = 1500.0f; // Max travel distance (m)
+            bool hit = false;
+            float hit_nx = 0, hit_ny = 1, hit_nz = 0;
+
+            // Simple fast DDA through the 3D voxel volume
+            while (t < max_t) {
+                t += step;
+                float px = cur_x + dir_x * t;
+                float py = cur_y + dir_y * t;
+                float pz = cur_z + dir_z * t;
+                
+                int gx = std::floor((px - grid.min_x) / grid.cell_size);
+                int gy = std::floor((py - grid.min_y) / grid.cell_size);
+                int gz = std::floor((pz - grid.min_z) / grid.cell_size);
+                
+                if (gx < 0 || gx >= grid.dim_x || gy < 0 || gy >= grid.dim_y || gz < 0 || gz >= grid.dim_z) {
+                    cur_x = px; cur_y = py; cur_z = pz;
+                    break; 
+                }
+                
+                int idx = gy * (grid.dim_x * grid.dim_z) + gz * grid.dim_x + gx;
+                if (voxel_data[idx] > 0) {
+                    hit = true;
+                    // Approximate normal based on entry face for accurate reflection
+                    float rx = (px - grid.min_x) / grid.cell_size - (gx + 0.5f);
+                    float ry = (py - grid.min_y) / grid.cell_size - (gy + 0.5f);
+                    float rz = (pz - grid.min_z) / grid.cell_size - (gz + 0.5f);
+                    
+                    if (std::abs(rx) > std::abs(ry) && std::abs(rx) > std::abs(rz)) { hit_nx = (rx > 0) ? 1 : -1; hit_ny = 0; hit_nz = 0; }
+                    else if (std::abs(ry) > std::abs(rx) && std::abs(ry) > std::abs(rz)) { hit_nx = 0; hit_ny = (ry > 0) ? 1 : -1; hit_nz = 0; }
+                    else { hit_nx = 0; hit_ny = 0; hit_nz = (rz > 0) ? 1 : -1; }
+                    
+                    // Back up exactly to surface
+                    cur_x = px - dir_x * step;
+                    cur_y = py - dir_y * step;
+                    cur_z = pz - dir_z * step;
+                    break;
+                }
+            }
+            
+            path.points.push_back({cur_x, cur_y, cur_z});
+            if (!hit) break; // Ray escaped bounding box
+            
+            // Vector Reflection Mathematics
+            float dot = dir_x * hit_nx + dir_y * hit_ny + dir_z * hit_nz;
+            dir_x = dir_x - 2.0f * dot * hit_nx;
+            dir_y = dir_y - 2.0f * dot * hit_ny;
+            dir_z = dir_z - 2.0f * dot * hit_nz;
+            
+            // Nudge to prevent immediate self-collision on next loop
+            cur_x += hit_nx * step * 2.0f;
+            cur_y += hit_ny * step * 2.0f;
+            cur_z += hit_nz * step * 2.0f;
+        }
+        paths.push_back(path);
+    }
+    return paths;
 }
 
 int main() {
@@ -314,8 +416,12 @@ int main() {
             params.max_bounces = 3; 
             params.ray_count = 500000; 
 
+            // 1. Run actual heavy CUDA simulation
             std::vector<float> rx_power_dbm;
             run_rf_simulation(grid_info, params, rx_power_dbm);
+
+            // 2. Run blazing-fast CPU visualizer generation
+            std::vector<RayPath> ray_paths = generate_visualization_rays(params, grid_info, voxel_data, 1000);
 
             crow::json::wvalue res;
             res["grid_w"] = grid_info.dim_x;
@@ -325,6 +431,21 @@ int main() {
             
             res["surface_heights"] = surface_mesh;
             res["heatmap_dbm"] = std::vector<float>(rx_power_dbm.begin(), rx_power_dbm.end());
+
+            // Append ray visualizer paths to the JSON response
+            crow::json::wvalue::list paths_json;
+            for (const auto& p : ray_paths) {
+                crow::json::wvalue::list points_json;
+                for (const auto& pt : p.points) {
+                    crow::json::wvalue::list coord;
+                    coord.push_back(pt[0]);
+                    coord.push_back(pt[1]);
+                    coord.push_back(pt[2]);
+                    points_json.push_back(coord);
+                }
+                paths_json.push_back(points_json);
+            }
+            res["ray_paths"] = std::move(paths_json);
 
             // Provide the web-ui with the computed UTM values so it can accurately stitch the satellite map
             res["easting"] = easting;

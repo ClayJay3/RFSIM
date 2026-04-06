@@ -10,11 +10,10 @@
         #ui-panel { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(20, 20, 20, 0.85); padding: 20px; border-radius: 12px; width: 320px; border: 1px solid #333; max-height: 90vh; overflow-y: auto;}
         h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
         
-        /* Collapsible Menu Styles */
         #ui-controls {
             transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out;
             overflow: hidden;
-            max-height: 1200px; /* Large enough to hold all controls */
+            max-height: 1200px;
             opacity: 1;
             margin-top: 15px;
         }
@@ -32,14 +31,15 @@
         .control-group { margin-bottom: 12px; }
         label { display: block; font-size: 0.85rem; margin-bottom: 5px; color: #aaa; }
         input[type="number"], input[type="text"], input[type="password"], select { width: 100%; padding: 8px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
+        input[type="checkbox"] { margin-right: 10px; cursor: pointer; }
         button { width: 100%; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
         button:hover { background: #0052a3; }
+        button:disabled { background: #444; color: #888; cursor: not-allowed; }
         #loading { display: none; margin-top: 10px; font-size: 0.9rem; color: #00ffcc; text-align: center; }
         #legend { position: absolute; bottom: 20px; right: 20px; z-index: 10; background: rgba(20, 20, 20, 0.85); padding: 15px; border-radius: 8px; border: 1px solid #333; }
         .gradient-bar { width: 200px; height: 20px; border-radius: 4px; background: linear-gradient(to right, transparent, blue, cyan, yellow, red); margin-bottom: 5px; }
         .legend-labels { display: flex; justify-content: space-between; font-size: 0.8rem; color: #ccc; }
     </style>
-    <!-- Include Three.js and Proj4js for coordinate conversion -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
@@ -81,6 +81,10 @@
                 <label>Heatmap Opacity: <span id="opacity-val">0.7</span></label>
                 <input type="range" id="heatmap-opacity" min="0" max="1" step="0.1" value="0.7" oninput="updateOpacity(this.value)">
             </div>
+            <div class="control-group" style="display: flex; align-items: center;">
+                <input type="checkbox" id="viz-rays" checked>
+                <label style="margin-bottom: 0;">Visualize RF Propagation (Real-time)</label>
+            </div>
 
             <button id="sim-btn" onclick="runSimulation()">Run Volumetric Simulation</button>
             <div id="loading">Voxelizing LiDAR & Raymarching...</div>
@@ -116,12 +120,17 @@
 
         let terrainMesh = null, txMarker = null;
         let heatmapMesh = null; 
+        
+        // Ray Animation Globals
+        let activeRays = [];
+        let photonMesh = null;
+        let rayLinesMesh = null;
+        const dummyMatrix = new THREE.Object3D();
 
         window.onload = async () => {
             const simBtn = document.getElementById('sim-btn');
             simBtn.innerText = "Locating Dataset Center...";
             simBtn.disabled = true;
-            simBtn.style.opacity = "0.5";
 
             try {
                 const res = await fetch('/api/default_location');
@@ -135,31 +144,60 @@
             } finally {
                 simBtn.innerText = "Run Volumetric Simulation";
                 simBtn.disabled = false;
-                simBtn.style.opacity = "1.0";
             }
         };
 
         function toggleMenu() {
             const controls = document.getElementById('ui-controls');
             const icon = document.getElementById('collapse-icon');
-            
             controls.classList.toggle('collapsed');
-            
-            if (controls.classList.contains('collapsed')) {
-                icon.innerText = '▶';
-            } else {
-                icon.innerText = '▼';
-            }
+            icon.innerText = controls.classList.contains('collapsed') ? '▶' : '▼';
         }
 
-        function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
+        // Animation Loop handling Orbit Controls and Real-time Photons
+        function animate() { 
+            requestAnimationFrame(animate); 
+            controls.update(); 
+            
+            // RF Photon Real-Time Animation
+            if (photonMesh && activeRays.length > 0) {
+                const t = (Date.now() / 1000); // Animation timer
+                const speed = 250; // Metres per second
+                
+                for (let i = 0; i < activeRays.length; i++) {
+                    const ray = activeRays[i];
+                    // Stagger the start times to create a steady stream effect
+                    let progress = ((t * speed) + ray.staggerOffset) % ray.totalDist; 
+                    
+                    let currentPos = ray.segments[ray.segments.length - 1].end; // Default to end point
+                    for (let s of ray.segments) {
+                        if (progress >= s.accum && progress <= s.accum + s.dist) {
+                            let localP = (progress - s.accum) / s.dist;
+                            currentPos = new THREE.Vector3().copy(s.start).lerp(s.end, localP);
+                            break;
+                        }
+                    }
+                    dummyMatrix.position.copy(currentPos);
+                    dummyMatrix.updateMatrix();
+                    photonMesh.setMatrixAt(ray.id, dummyMatrix.matrix);
+                }
+                photonMesh.instanceMatrix.needsUpdate = true;
+            }
+
+            renderer.render(scene, camera); 
+        }
         animate();
+        
         window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 
         function updateOpacity(val) {
             document.getElementById('opacity-val').innerText = val;
             if (heatmapMesh && heatmapMesh.material) {
                 heatmapMesh.material.opacity = parseFloat(val);
+            }
+            // Also dim the physical rayweb when lowering heatmap opacity
+            if (rayLinesMesh && rayLinesMesh.material) {
+                rayLinesMesh.material.opacity = Math.min(0.2, parseFloat(val));
             }
         }
 
@@ -173,6 +211,7 @@
             return [r, g, b, 255];
         }
 
+        // ... [Fetch Stitch Satellite logic remains same] ...
         async function fetchStitchedSatellite(payload, projStr) {
             function lngLatToTile(lng, lat, z) {
                 const n = Math.pow(2, z);
@@ -181,7 +220,6 @@
                 const y = Math.floor(n * (1 - (Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI)) / 2);
                 return {x, y};
             }
-
             function tileToLngLat(x, y, z) {
                 const n = Math.pow(2, z);
                 const lng = x / n * 360 - 180;
@@ -190,11 +228,9 @@
                 return [lng, lat];
             }
 
-            // Get bounding box in Lat/Lng
             const tl_lnglat = proj4(projStr, 'WGS84', [payload.easting - payload.radius, payload.northing + payload.radius]);
             const br_lnglat = proj4(projStr, 'WGS84', [payload.easting + payload.radius, payload.northing - payload.radius]);
 
-            // Find optimal zoom level that keeps tile count reasonable (max 5x5 grid = 25 tiles)
             let z = 21;
             let tlTile, brTile;
             while(z > 0) {
@@ -219,19 +255,18 @@
                 for (let y = tlTile.y; y <= brTile.y; y++) {
                     fetchPromises.push(new Promise((resolve) => {
                         const img = new Image();
-                        img.crossOrigin = "Anonymous"; // Request CORS bypass to prevent canvas tainting in WebGL
+                        img.crossOrigin = "Anonymous"; 
                         img.onload = () => {
                             ctx.drawImage(img, (x - tlTile.x) * 256, (y - tlTile.y) * 256);
                             resolve();
                         };
-                        img.onerror = () => resolve(); // Silently fail missing tiles and leave grid blank
+                        img.onerror = () => resolve(); 
                         img.src = `https://mt1.google.com/vt/lyrs=y&x=${x}&y=${y}&z=${z}`;
                     }));
                 }
             }
             await Promise.all(fetchPromises);
 
-            // Calculate precise UTM bounds of the stitched canvas
             const canvas_tl_lnglat = tileToLngLat(tlTile.x, tlTile.y, z);
             const canvas_br_lnglat = tileToLngLat(brTile.x + 1, brTile.y + 1, z);
 
@@ -240,7 +275,7 @@
 
             return {
                 canvas: canvas,
-                canvas_bl_utm: [canvas_tl_utm[0], canvas_br_utm[1]], // Bottom-Left UTM coordinates
+                canvas_bl_utm: [canvas_tl_utm[0], canvas_br_utm[1]], 
                 canvasWidthUTM: canvas_br_utm[0] - canvas_tl_utm[0],
                 canvasHeightUTM: canvas_tl_utm[1] - canvas_br_utm[1]
             };
@@ -263,15 +298,12 @@
             };
 
             try {
-                // First, run the simulation. The backend will convert Lat/Lng to UTM and return it in the response.
                 const response = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if(!response.ok) { alert(await response.text()); return; }
                 const data = await response.json();
                 
-                // Now build the proj string with the returned UTM Zone
                 const projStr = `+proj=utm +zone=${data.zone} ${data.hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
                 
-                // Fetch the satellite tiles using the exact UTM bounds computed by the backend C++ Engine
                 let satTileData = null;
                 try {
                     satTileData = await fetchStitchedSatellite({
@@ -283,7 +315,6 @@
                     console.error("Failed to fetch satellite tiles", e);
                 }
                 
-                // Pass the backend's explicit projected coordinates into the 3D renderer
                 renderResults(data, {
                     easting: data.easting, 
                     northing: data.northing, 
@@ -300,9 +331,20 @@
             }
         }
 
+        // Transforms UTM directly into matching WebGL relative space
+        function utmToVector3(easting, altitude, northing, params, data) {
+            return new THREE.Vector3(
+                -(easting - params.easting), 
+                altitude - data.min_alt, 
+                -(northing - params.northing)
+            );
+        }
+
         function renderResults(data, params, satTileData = null) {
             if (terrainMesh) scene.remove(terrainMesh);
             if (txMarker) scene.remove(txMarker);
+            if (rayLinesMesh) scene.remove(rayLinesMesh);
+            if (photonMesh) scene.remove(photonMesh);
 
             const geom = new THREE.PlaneGeometry(params.radius * 2, params.radius * 2, data.grid_w - 1, data.grid_h - 1);
             geom.rotateX(-Math.PI / 2);
@@ -319,7 +361,6 @@
                 satTexture = new THREE.CanvasTexture(satTileData.canvas);
                 satTexture.encoding = THREE.sRGBEncoding;
                 
-                // Align texture exactly to the 3D mesh by calculating the relative offset/scale
                 const mesh_bl_utm = [params.easting - params.radius, params.northing - params.radius];
                 const offsetX = (mesh_bl_utm[0] - satTileData.canvas_bl_utm[0]) / satTileData.canvasWidthUTM;
                 const offsetY = (mesh_bl_utm[1] - satTileData.canvas_bl_utm[1]) / satTileData.canvasHeightUTM;
@@ -378,34 +419,47 @@
             heatmapMesh = new THREE.Mesh(geom, heatmapMat);
             terrainMesh.add(heatmapMesh);
 
-            // 3. Overlay Layer 2: 1-meter Grid
-            const gridCanvas = document.createElement('canvas');
-            gridCanvas.width = 128;
-            gridCanvas.height = 128;
-            const ctx = gridCanvas.getContext('2d');
-            ctx.fillStyle = 'rgba(0,0,0,0)';
-            ctx.fillRect(0, 0, 128, 128);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'; 
-            ctx.lineWidth = 4; 
-            ctx.strokeRect(0, 0, 128, 128);
-
-            const gridTex = new THREE.CanvasTexture(gridCanvas);
-            gridTex.wrapS = THREE.RepeatWrapping;
-            gridTex.wrapT = THREE.RepeatWrapping;
-            gridTex.repeat.set(params.radius * 2, params.radius * 2);
-            gridTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-            const gridMat = new THREE.MeshBasicMaterial({
-                map: gridTex,
-                transparent: true,
-                depthWrite: false, 
-                polygonOffset: true,
-                polygonOffsetFactor: -2, 
-                polygonOffsetUnits: -2
-            });
-
-            const gridMesh = new THREE.Mesh(geom, gridMat);
-            terrainMesh.add(gridMesh);
+            // 3. Setup RF Animation Overlays
+            activeRays = [];
+            if (document.getElementById('viz-rays').checked && data.ray_paths) {
+                const linePos = [];
+                // Instanced Mesh allows rendering 1000 spheres in 1 single draw call
+                const photonGeo = new THREE.SphereGeometry(1.0, 8, 8);
+                const photonMat = new THREE.MeshBasicMaterial({color: 0x00ffff}); // Bright Cyan
+                photonMesh = new THREE.InstancedMesh(photonGeo, photonMat, data.ray_paths.length);
+                
+                data.ray_paths.forEach((path, i) => {
+                    const pts = path.map(p => utmToVector3(p[0], p[1], p[2], params, data));
+                    
+                    for(let j=0; j<pts.length-1; j++) {
+                        linePos.push(pts[j].x, pts[j].y, pts[j].z);
+                        linePos.push(pts[j+1].x, pts[j+1].y, pts[j+1].z);
+                    }
+                    
+                    let totalDist = 0;
+                    let segments = [];
+                    for(let j=0; j<pts.length-1; j++) {
+                        let d = pts[j].distanceTo(pts[j+1]);
+                        segments.push({start: pts[j], end: pts[j+1], dist: d, accum: totalDist});
+                        totalDist += d;
+                    }
+                    // Random stagger offset so photons emit as a constant stream rather than all at once
+                    activeRays.push({segments: segments, totalDist: totalDist, id: i, staggerOffset: Math.random() * 500});
+                });
+                
+                // Draw faint web of ray paths to show multipath environment clearly
+                const lineGeo = new THREE.BufferGeometry();
+                lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
+                const lineMat = new THREE.LineBasicMaterial({
+                    color: 0x00ffff, 
+                    transparent: true, 
+                    opacity: 0.15, // Keep faint so it doesn't overwhelm heatmap
+                    blending: THREE.AdditiveBlending
+                });
+                rayLinesMesh = new THREE.LineSegments(lineGeo, lineMat);
+                scene.add(rayLinesMesh);
+                scene.add(photonMesh);
+            }
 
             // 4. Add Antenna Marker
             txMarker = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, params.tx_height), new THREE.MeshBasicMaterial({ color: 0xffffff }));
