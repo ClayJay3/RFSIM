@@ -100,8 +100,12 @@
             </div>
             <div style="display: flex; gap: 10px;">
                 <div class="control-group">
-                    <label>Beamwidth (deg)</label>
+                    <label>Horiz. Beam (°)</label>
                     <input type="number" id="beamwidth" value="120">
+                </div>
+                <div class="control-group">
+                    <label>Vert. Beam (°)</label>
+                    <input type="number" id="v_beamwidth" value="15">
                 </div>
                 <div class="control-group">
                     <label>Tx Height (m)</label>
@@ -166,6 +170,7 @@
 
     <script>
         // --- HARDWARE CONFIGURATION DICTIONARY ---
+        // Includes approximate specs for the Vertical Beamwidth (vbw) property 
         const hardwareConfig = {
             radios: {
                 "RocketM9": { name: "RocketM9", freq: 900, tx_p: 28 },
@@ -176,42 +181,42 @@
             },
             antennas: {
                 "RocketM9": [
-                    { name: "Sector AM-9M13", gain: 13, bw: 120 },
-                    { name: "Yagi AMY-9M16", gain: 16, bw: 45 }
+                    { name: "Sector AM-9M13", gain: 13, bw: 120, vbw: 15 },
+                    { name: "Yagi AMY-9M16", gain: 16, bw: 45, vbw: 30 }
                 ],
                 "RocketM2": [
-                    { name: "Sector AM-V2G-Ti (120° config)", gain: 15, bw: 120 },
-                    { name: "Sector AM-2G15-120", gain: 15, bw: 120 },
-                    { name: "Sector AM-2G16-90", gain: 16, bw: 90 },
-                    { name: "Dish RD-2G24", gain: 24, bw: 6 },
-                    { name: "Omni AMO-2G10", gain: 10, bw: 360 },
-                    { name: "Omni AMO-2G13", gain: 13, bw: 360 }
+                    { name: "Sector AM-V2G-Ti (120° config)", gain: 15, bw: 120, vbw: 9 },
+                    { name: "Sector AM-2G15-120", gain: 15, bw: 120, vbw: 9 },
+                    { name: "Sector AM-2G16-90", gain: 16, bw: 90, vbw: 9 },
+                    { name: "Dish RD-2G24", gain: 24, bw: 6, vbw: 6 },
+                    { name: "Omni AMO-2G10", gain: 10, bw: 360, vbw: 12 },
+                    { name: "Omni AMO-2G13", gain: 13, bw: 360, vbw: 7 }
                 ],
                 "RocketM3": [
-                    { name: "Sector AM-3G18-120", gain: 18, bw: 120 },
-                    { name: "Dish RD-3G26", gain: 26, bw: 6 },
-                    { name: "Omni AMO-3G12", gain: 12, bw: 360 }
+                    { name: "Sector AM-3G18-120", gain: 18, bw: 120, vbw: 9 },
+                    { name: "Dish RD-3G26", gain: 26, bw: 6, vbw: 6 },
+                    { name: "Omni AMO-3G12", gain: 12, bw: 360, vbw: 8 }
                 ],
                 "RocketM365": [
-                    { name: "Sector AM-3G18-120", gain: 18, bw: 120 },
-                    { name: "Dish RD-3G26", gain: 26, bw: 6 },
-                    { name: "Omni AMO-3G12", gain: 12, bw: 360 }
+                    { name: "Sector AM-3G18-120", gain: 18, bw: 120, vbw: 9 },
+                    { name: "Dish RD-3G26", gain: 26, bw: 6, vbw: 6 },
+                    { name: "Omni AMO-3G12", gain: 12, bw: 360, vbw: 8 }
                 ],
                 "RocketM5": [
-                    { name: "Sector AM-V5G-Ti (120° config)", gain: 19, bw: 120 },
-                    { name: "Sector AM-M-V5G-Ti", gain: 15, bw: 120 },
-                    { name: "Sector AM-5G16-120", gain: 16, bw: 120 },
-                    { name: "Sector AM-5G17-90", gain: 17, bw: 90 },
-                    { name: "Sector AM-5G19-120", gain: 19, bw: 120 },
-                    { name: "Sector AM-5G20-90", gain: 20, bw: 90 },
-                    { name: "Sector AM-5AC21-60", gain: 21, bw: 60 },
-                    { name: "Sector AM-5AC22-45", gain: 22, bw: 45 },
-                    { name: "Dish RD-5G31-AC", gain: 31, bw: 5 },
-                    { name: "Dish RD-5G30-LW", gain: 30, bw: 5 },
-                    { name: "Dish RD-5G30", gain: 30, bw: 5 },
-                    { name: "Dish RD-5G34", gain: 34, bw: 3 },
-                    { name: "Omni AMO-5G10", gain: 10, bw: 360 },
-                    { name: "Omni AMO-5G13", gain: 13, bw: 360 }
+                    { name: "Sector AM-V5G-Ti (120° config)", gain: 19, bw: 120, vbw: 4 },
+                    { name: "Sector AM-M-V5G-Ti", gain: 15, bw: 120, vbw: 4 },
+                    { name: "Sector AM-5G16-120", gain: 16, bw: 120, vbw: 8 },
+                    { name: "Sector AM-5G17-90", gain: 17, bw: 90, vbw: 8 },
+                    { name: "Sector AM-5G19-120", gain: 19, bw: 120, vbw: 4 },
+                    { name: "Sector AM-5G20-90", gain: 20, bw: 90, vbw: 4 },
+                    { name: "Sector AM-5AC21-60", gain: 21, bw: 60, vbw: 4 },
+                    { name: "Sector AM-5AC22-45", gain: 22, bw: 45, vbw: 4 },
+                    { name: "Dish RD-5G31-AC", gain: 31, bw: 5, vbw: 5 },
+                    { name: "Dish RD-5G30-LW", gain: 30, bw: 5, vbw: 5 },
+                    { name: "Dish RD-5G30", gain: 30, bw: 5, vbw: 5 },
+                    { name: "Dish RD-5G34", gain: 34, bw: 3, vbw: 3 },
+                    { name: "Omni AMO-5G10", gain: 10, bw: 360, vbw: 12 },
+                    { name: "Omni AMO-5G13", gain: 13, bw: 360, vbw: 7 }
                 ]
             }
         };
@@ -258,6 +263,7 @@
             
             document.getElementById('tx_gain').value = antData.gain;
             document.getElementById('beamwidth').value = antData.bw;
+            document.getElementById('v_beamwidth').value = antData.vbw || 10;
         }
 
         // --- 3D ENGINE LOGIC ---
@@ -588,7 +594,8 @@
                 tx_gain: parseFloat(document.getElementById('tx_gain').value),
                 tx_azimuth: parseFloat(document.getElementById('tx_az').value),
                 tx_elevation: parseFloat(document.getElementById('tx_el').value),
-                beamwidth: parseFloat(document.getElementById('beamwidth').value)
+                beamwidth: parseFloat(document.getElementById('beamwidth').value),
+                v_beamwidth: parseFloat(document.getElementById('v_beamwidth').value)
             };
 
             try {

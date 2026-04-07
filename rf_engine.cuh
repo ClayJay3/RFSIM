@@ -25,7 +25,8 @@ struct SimParams {
     float tx_azimuth_deg;         // Antenna Azimuth (0=N, 90=E)
     float tx_elevation_deg;       // Antenna Downtilt/Uptilt
     float tx_gain_dbi;            // Antenna Gain in dBi
-    float beamwidth_rad;          // Antenna 3dB Beamwidth
+    float beamwidth_rad;          // Antenna Horizontal 3dB Beamwidth
+    float vertical_beamwidth_rad; // Antenna Vertical 3dB Beamwidth
     
     float bounds_min_x, bounds_min_z; // Grid physical bounds
     float cell_size;              // Distance between Rx grid points

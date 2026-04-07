@@ -142,10 +142,12 @@ __device__ float calc_antenna_gain(Vec3 ray_dir, SimParams params) {
     while (delta_az < -PI) delta_az += 2.0f * PI;
     float ray_el = asinf(fmaxf(-1.0f, fminf(1.0f, ray_dir.y)));
     float delta_el = ray_el - el_rad;
-    float vertical_beamwidth_rad = 10.0f * (PI / 180.0f);
+    
+    // Dynamic vertical beamwidth from parameters
     float A_h = 12.0f * powf(delta_az / params.beamwidth_rad, 2.0f);
-    float A_v = 12.0f * powf(delta_el / vertical_beamwidth_rad, 2.0f);
+    float A_v = 12.0f * powf(delta_el / params.vertical_beamwidth_rad, 2.0f);
     float attenuation = fminf(A_h + A_v, 38.0f); 
+    
     return params.tx_gain_dbi - attenuation;
 }
 
@@ -217,7 +219,6 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
     float eirp_dbm = params.tx_power_dbm + gain_dbi;
     float p_tx_watts = powf(10.0f, (eirp_dbm - 30.0f) / 10.0f);
     
-    // MATHEMATICS FIX: Correct Friis Free Space Path Loss Calculation (Previous version artificially crushed LOS by 30dB)
     float power_density = p_tx_watts / (4.0f * PI * dist * dist);
     float a_eff = (lambda * lambda) / (4.0f * PI);
     float p_rx_watts = power_density * a_eff;
@@ -352,14 +353,12 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
         Vec3 hit_point = add(ray_orig, mul(ray_dir, hit_t));
         accumulated_dist += hit_t;
         
-        // Prevent Double Counting LOS (Only accumulate bounces)
         if (bounce > 0) {
             int rx_x = (int)((hit_point.x - params.bounds_min_x) / params.cell_size);
             int rx_z = (int)((hit_point.z - params.bounds_min_z) / params.cell_size);
 
             float A_t = d_omega * accumulated_dist * accumulated_dist; 
             
-            // Adjust footprint for grazing impacts
             Vec3 flat_ground = {0.0f, 1.0f, 0.0f};
             float cos_ground = fmaxf(0.05f, fabs(dot(ray_dir, flat_ground)));
             float A_footprint = A_t / cos_ground;
@@ -370,7 +369,6 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
             float a_eff = (lambda * lambda) / (4.0f * PI);
             float p_rx_watts_center = power_density * a_eff;
             
-            // FIX: Gaussian Ray Splatting (Preventing Artificial Stacking)
             float r_footprint = sqrtf(spread_area / PI);
             int radius_cells = (int)ceilf(r_footprint / params.cell_size);
             radius_cells = min(radius_cells, 6);
@@ -396,8 +394,6 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
                                 float splat_watts = p_rx_watts_center * weight;
                                 if (splat_watts > 1e-18f) {
                                     int grid_idx = pz * params.grid_width + px;
-                                    // Use atomicMax to record density. atomicAdd causes immense artificial 
-                                    // energy bloom when thousands of discrete wavefront samples overlap!
                                     atomicMax((int*)&rx_grid_watts[grid_idx], __float_as_int(splat_watts));
                                     atomicMinFloat(&min_dist_grid[grid_idx], accumulated_dist);
                                     atomicMaxFloat(&max_dist_grid[grid_idx], accumulated_dist);

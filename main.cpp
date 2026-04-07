@@ -338,6 +338,7 @@ int main() {
             float tx_el = body.has("tx_elevation") ? body["tx_elevation"].d() : -2.0;
             float tx_gain = body.has("tx_gain") ? body["tx_gain"].d() : 18.0;
             float beamwidth = body.has("beamwidth") ? body["beamwidth"].d() : 65.0;
+            float v_beamwidth = body.has("v_beamwidth") ? body["v_beamwidth"].d() : 10.0; // New Dynamic Variable
 
             std::vector<uint8_t> voxel_data;
             VoxelGrid grid_info;
@@ -359,6 +360,7 @@ int main() {
             params.tx_elevation_deg = tx_el;
             params.tx_gain_dbi = tx_gain;
             params.beamwidth_rad = beamwidth * (M_PI / 180.0);
+            params.vertical_beamwidth_rad = v_beamwidth * (M_PI / 180.0); // Passed to Engine
             
             params.bounds_min_x = grid_info.min_x;
             params.bounds_min_z = grid_info.min_z;
