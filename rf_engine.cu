@@ -219,8 +219,10 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
     float eirp_dbm = params.tx_power_dbm + gain_dbi;
     float p_tx_watts = powf(10.0f, (eirp_dbm - 30.0f) / 10.0f);
     
+    // Incorporate the Receiver Antenna Gain
+    float rx_gain_lin = powf(10.0f, params.rx_gain_dbi / 10.0f);
     float power_density = p_tx_watts / (4.0f * PI * dist * dist);
-    float a_eff = (lambda * lambda) / (4.0f * PI);
+    float a_eff = rx_gain_lin * (lambda * lambda) / (4.0f * PI);
     float p_rx_watts = power_density * a_eff;
 
     int num_steps = (int)ceilf(dist / (grid.cell_size * 0.5f));
@@ -334,6 +336,8 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
     float eirp_dbm = params.tx_power_dbm + gain_dbi;
     float p_watts = powf(10.0f, (eirp_dbm - 30.0f) / 10.0f);
     
+    // Incorporate the Receiver Antenna Gain
+    float rx_gain_lin = powf(10.0f, params.rx_gain_dbi / 10.0f);
     float d_omega = 4.0f * PI / params.ray_count;
     float p_ray_watts_init = p_watts * (d_omega / (4.0f * PI)); 
     
@@ -366,7 +370,7 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
             
             float spread_area = fmaxf(A_footprint, A_voxel); 
             float power_density = (p_ray_watts_init * ray_power_multiplier) / spread_area;
-            float a_eff = (lambda * lambda) / (4.0f * PI);
+            float a_eff = rx_gain_lin * (lambda * lambda) / (4.0f * PI);
             float p_rx_watts_center = power_density * a_eff;
             
             float r_footprint = sqrtf(spread_area / PI);

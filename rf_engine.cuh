@@ -24,7 +24,8 @@ struct SimParams {
     float tx_power_dbm;           // Tx Power in dBm
     float tx_azimuth_deg;         // Antenna Azimuth (0=N, 90=E)
     float tx_elevation_deg;       // Antenna Downtilt/Uptilt
-    float tx_gain_dbi;            // Antenna Gain in dBi
+    float tx_gain_dbi;            // Transmitter Antenna Gain in dBi
+    float rx_gain_dbi;            // Receiver Antenna Gain in dBi
     float beamwidth_rad;          // Antenna Horizontal 3dB Beamwidth
     float vertical_beamwidth_rad; // Antenna Vertical 3dB Beamwidth
     
