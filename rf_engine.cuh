@@ -38,7 +38,8 @@ struct SimParams {
 extern "C" void run_rf_simulation(
     const VoxelGrid& grid,
     const SimParams& params,
-    std::vector<float>& out_rx_power_dbm
+    std::vector<float>& out_rx_power_dbm,
+    std::vector<float>& out_delay_spread_ns
 );
 
 #endif // RF_ENGINE_CUH

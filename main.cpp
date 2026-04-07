@@ -14,8 +14,17 @@
 struct Point3D { float e, n, a; int cls; };
 
 struct RayPath {
-    std::vector<std::vector<float>> points; // {easting, altitude, northing}
+    std::vector<std::vector<float>> points; // {e, a, n, px, py, pz}
 };
+
+inline Vec3 cross_prod(Vec3 a, Vec3 b) { 
+    return {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x}; 
+}
+inline float length(Vec3 a) { return sqrt(a.x*a.x + a.y*a.y + a.z*a.z); }
+inline Vec3 normalize(Vec3 a) {
+    float l = length(a);
+    return l > 0 ? Vec3{a.x/l, a.y/l, a.z/l} : a;
+}
 
 // Helper to get DB connection safely and prevent duplication
 sqlite3* get_db_connection() {
@@ -106,8 +115,6 @@ bool build_voxel_grid(
         
         if (gx >= 0 && gx < grid_info.dim_x && gz >= 0 && gz < grid_info.dim_z && gy >= 0 && gy < grid_info.dim_y) {
             int idx = gy * (grid_info.dim_x * grid_info.dim_z) + gz * grid_info.dim_x + gx;
-            // Differentiate Ground (2) vs Building (6) vs Trees (3-5)
-            // Storing classification directly into the voxel array for advanced material logic later
             voxel_data[idx] = (p.cls > 0) ? p.cls : 1; 
         }
     }
@@ -115,7 +122,6 @@ bool build_voxel_grid(
     grid_info.data = voxel_data.data();
 
     // Generate a lightweight 2.5D top-surface heightmap to send to the web browser
-    // This allows the frontend to easily render a mesh that wraps the LiDAR shape (buildings included)
     surface_heightmap.assign(grid_info.dim_x * grid_info.dim_z, min_alt);
     for (int x = 0; x < grid_info.dim_x; x++) {
         for (int z = 0; z < grid_info.dim_z; z++) {
@@ -133,8 +139,7 @@ bool build_voxel_grid(
 }
 
 // ------------------------------------------------------------------
-// Real-time Visualizer CPU Raymarcher
-// Safely calculates 1000 ray paths purely for Web UI animation
+// Real-time Visualizer CPU Raymarcher (Polarization added)
 // ------------------------------------------------------------------
 std::vector<RayPath> generate_visualization_rays(
     const SimParams& params, 
@@ -152,34 +157,35 @@ std::vector<RayPath> generate_visualization_rays(
     for (int i = 0; i < num_rays; ++i) {
         RayPath path;
         
-        // Scatter direction based on beamwidth
         float az = base_az + dis_angle(gen);
         float el = base_el + dis_angle(gen);
         
-        // Standard UTM mapping: X=East, Y=Altitude, Z=North
-        float dir_x = sin(az) * cos(el);
-        float dir_y = sin(el);
-        float dir_z = cos(az) * cos(el);
+        Vec3 ray_dir = { sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el) };
+        
+        // Calculate initial Vertical E-Field Polarization
+        Vec3 up = {0, 1, 0};
+        Vec3 right = cross_prod(ray_dir, up);
+        if (length(right) < 0.001f) right = {1, 0, 0};
+        Vec3 pol = normalize(cross_prod(right, ray_dir));
         
         float cur_x = params.tx_x;
         float cur_y = params.tx_y;
         float cur_z = params.tx_z;
         
-        path.points.push_back({cur_x, cur_y, cur_z});
+        path.points.push_back({cur_x, cur_y, cur_z, pol.x, pol.y, pol.z});
 
         for (int bounce = 0; bounce < params.max_bounces; ++bounce) {
             float step = grid.cell_size * 0.2f; 
             float t = 0;
-            float max_t = 1500.0f; // Max travel distance (m)
+            float max_t = 1500.0f; 
             bool hit = false;
-            float hit_nx = 0, hit_ny = 1, hit_nz = 0;
+            Vec3 hit_normal = {0, 1, 0};
 
-            // Simple fast DDA through the 3D voxel volume
             while (t < max_t) {
                 t += step;
-                float px = cur_x + dir_x * t;
-                float py = cur_y + dir_y * t;
-                float pz = cur_z + dir_z * t;
+                float px = cur_x + ray_dir.x * t;
+                float py = cur_y + ray_dir.y * t;
+                float pz = cur_z + ray_dir.z * t;
                 
                 int gx = std::floor((px - grid.min_x) / grid.cell_size);
                 int gy = std::floor((py - grid.min_y) / grid.cell_size);
@@ -191,38 +197,41 @@ std::vector<RayPath> generate_visualization_rays(
                 }
                 
                 int idx = gy * (grid.dim_x * grid.dim_z) + gz * grid.dim_x + gx;
-                if (voxel_data[idx] > 0) {
+                int cls = voxel_data[idx];
+                
+                // BUGFIX: Bounce off ALL solid obstacles, but pass through vegetation (3,4,5)
+                if (cls > 0 && !(cls >= 3 && cls <= 5)) { 
                     hit = true;
-                    // Approximate normal based on entry face for accurate reflection
                     float rx = (px - grid.min_x) / grid.cell_size - (gx + 0.5f);
                     float ry = (py - grid.min_y) / grid.cell_size - (gy + 0.5f);
                     float rz = (pz - grid.min_z) / grid.cell_size - (gz + 0.5f);
                     
-                    if (std::abs(rx) > std::abs(ry) && std::abs(rx) > std::abs(rz)) { hit_nx = (rx > 0) ? 1 : -1; hit_ny = 0; hit_nz = 0; }
-                    else if (std::abs(ry) > std::abs(rx) && std::abs(ry) > std::abs(rz)) { hit_nx = 0; hit_ny = (ry > 0) ? 1 : -1; hit_nz = 0; }
-                    else { hit_nx = 0; hit_ny = 0; hit_nz = (rz > 0) ? 1 : -1; }
+                    if (std::abs(rx) > std::abs(ry) && std::abs(rx) > std::abs(rz)) { hit_normal = {(rx > 0) ? 1.0f : -1.0f, 0, 0}; }
+                    else if (std::abs(ry) > std::abs(rx) && std::abs(ry) > std::abs(rz)) { hit_normal = {0, (ry > 0) ? 1.0f : -1.0f, 0}; }
+                    else { hit_normal = {0, 0, (rz > 0) ? 1.0f : -1.0f}; }
                     
-                    // Back up exactly to surface
-                    cur_x = px - dir_x * step;
-                    cur_y = py - dir_y * step;
-                    cur_z = pz - dir_z * step;
+                    cur_x = px - ray_dir.x * step;
+                    cur_y = py - ray_dir.y * step;
+                    cur_z = pz - ray_dir.z * step;
                     break;
                 }
             }
             
-            path.points.push_back({cur_x, cur_y, cur_z});
-            if (!hit) break; // Ray escaped bounding box
+            path.points.push_back({cur_x, cur_y, cur_z, pol.x, pol.y, pol.z});
+            if (!hit) break; 
             
-            // Vector Reflection Mathematics
-            float dot = dir_x * hit_nx + dir_y * hit_ny + dir_z * hit_nz;
-            dir_x = dir_x - 2.0f * dot * hit_nx;
-            dir_y = dir_y - 2.0f * dot * hit_ny;
-            dir_z = dir_z - 2.0f * dot * hit_nz;
+            // Vector Reflection for Ray Direction
+            float dot_dir = ray_dir.x * hit_normal.x + ray_dir.y * hit_normal.y + ray_dir.z * hit_normal.z;
+            ray_dir = {ray_dir.x - 2.0f * dot_dir * hit_normal.x, ray_dir.y - 2.0f * dot_dir * hit_normal.y, ray_dir.z - 2.0f * dot_dir * hit_normal.z};
             
-            // Nudge to prevent immediate self-collision on next loop
-            cur_x += hit_nx * step * 2.0f;
-            cur_y += hit_ny * step * 2.0f;
-            cur_z += hit_nz * step * 2.0f;
+            // Mathematically twist Polarization Vector upon reflection
+            float dot_pol = pol.x * hit_normal.x + pol.y * hit_normal.y + pol.z * hit_normal.z;
+            pol = {pol.x - 2.0f * dot_pol * hit_normal.x, pol.y - 2.0f * dot_pol * hit_normal.y, pol.z - 2.0f * dot_pol * hit_normal.z};
+            pol = normalize(pol);
+
+            cur_x += hit_normal.x * step * 2.0f;
+            cur_y += hit_normal.y * step * 2.0f;
+            cur_z += hit_normal.z * step * 2.0f;
         }
         paths.push_back(path);
     }
@@ -248,10 +257,7 @@ int main() {
         sqlite3* db = get_db_connection();
         if (!db) return crow::response(500, "Database not found");
 
-        // Efficiently find an approximate geographic center of the dataset.
-        // Full table scans (MIN/MAX) take minutes on hundreds of millions of points without an index.
-        // Instead, we instantly query MAX(id), sample 500 evenly spaced points, and find their center in < 5ms.
-        
+        // Efficient center extraction via temporal sampling
         sqlite3_stmt* stmt_max;
         long long max_id = 0;
         if (sqlite3_prepare_v2(db, "SELECT MAX(id) FROM ProcessedLiDARPoints", -1, &stmt_max, nullptr) == SQLITE_OK) {
@@ -265,20 +271,15 @@ int main() {
 
         if (max_id > 0) {
             std::string q_center;
-            
             if (max_id <= 1000) {
-                // If the dataset is tiny, just do a full B-Tree calculation
                 q_center = "SELECT (MIN(easting) + MAX(easting)) / 2.0, (MIN(northing) + MAX(northing)) / 2.0 FROM ProcessedLiDARPoints";
             } else {
-                // Generate 500 spaced IDs across the dataset
                 std::stringstream in_clause;
                 long long step = max_id / 500;
                 for (int i = 1; i <= 500; i++) {
                     in_clause << (i * step);
                     if (i < 500) in_clause << ",";
                 }
-                
-                // Fetch the bounds of only those 500 specific B-Tree branches
                 q_center = "SELECT (MIN(easting) + MAX(easting)) / 2.0, (MIN(northing) + MAX(northing)) / 2.0 "
                            "FROM ProcessedLiDARPoints WHERE id IN (" + in_clause.str() + ")";
             }
@@ -298,7 +299,6 @@ int main() {
             return crow::response(404, "No data in database");
         }
 
-        // Get the UTM Zone Label (Assuming the dataset falls inside a single UTM zone)
         std::string q_zone = "SELECT label FROM Zones LIMIT 1";
         sqlite3_stmt* stmt_zone;
         std::string label = "";
@@ -312,7 +312,6 @@ int main() {
         
         sqlite3_close(db);
 
-        // Parse Zone Database Label (e.g., "15N")
         int zone = 15;
         bool is_north = true;
         char hem = 'N';
@@ -323,14 +322,13 @@ int main() {
             try { zone = std::stoi(zone_str); } catch(...) {}
         }
 
-        // Project UTM back to GPS
         OGRSpatialReference utm_srs;
         utm_srs.SetWellKnownGeogCS("WGS84");
         utm_srs.SetUTM(zone, is_north);
 
         OGRSpatialReference wgs84_srs;
         wgs84_srs.SetWellKnownGeogCS("WGS84");
-        wgs84_srs.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER); // Force X=Lon, Y=Lat for safety
+        wgs84_srs.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER); 
 
         OGRCoordinateTransformation *poCT = OGRCreateCoordinateTransformation(&utm_srs, &wgs84_srs);
         double lon = easting;
@@ -351,13 +349,11 @@ int main() {
         if (!body) return crow::response(400, "Invalid JSON");
 
         try {
-            // New Input: Use standard Lat/Lng coords
             double lat = body.has("lat") ? body["lat"].d() : 38.0;
             double lng = body.has("lng") ? body["lng"].d() : -91.0;
             float radius = body.has("radius") ? body["radius"].d() : 100.0;
-            float voxel_res = body.has("resolution") ? body["resolution"].d() : 2.0; // 2m voxels
+            float voxel_res = body.has("resolution") ? body["resolution"].d() : 2.0;
             
-            // Auto-calculate the UTM Zone
             int zone = std::floor((lng + 180.0) / 6.0) + 1;
             bool is_north = lat >= 0.0;
 
@@ -369,7 +365,6 @@ int main() {
             utm_srs.SetWellKnownGeogCS("WGS84");
             utm_srs.SetUTM(zone, is_north);
 
-            // Translate GPS Input to UTM for the Voxel grid
             OGRCoordinateTransformation *poCT = OGRCreateCoordinateTransformation(&wgs84_srs, &utm_srs);
             double easting = lng;
             double northing = lat;
@@ -394,7 +389,6 @@ int main() {
                 return crow::response(400, "No LiDAR points found in this area. Check your DB and coordinates.");
             }
 
-            // Estimate ground height at center
             float center_ground = surface_mesh[(grid_info.dim_z/2) * grid_info.dim_x + (grid_info.dim_x/2)];
 
             SimParams params;
@@ -416,11 +410,12 @@ int main() {
             params.max_bounces = 3; 
             params.ray_count = 500000; 
 
-            // 1. Run actual heavy CUDA simulation
+            // 1. Run actual heavy CUDA simulation (Now extracts Delay Spread too!)
             std::vector<float> rx_power_dbm;
-            run_rf_simulation(grid_info, params, rx_power_dbm);
+            std::vector<float> delay_spread_ns;
+            run_rf_simulation(grid_info, params, rx_power_dbm, delay_spread_ns);
 
-            // 2. Run blazing-fast CPU visualizer generation
+            // 2. Run CPU visualizer generation
             std::vector<RayPath> ray_paths = generate_visualization_rays(params, grid_info, voxel_data, 1000);
 
             crow::json::wvalue res;
@@ -431,23 +426,25 @@ int main() {
             
             res["surface_heights"] = surface_mesh;
             res["heatmap_dbm"] = std::vector<float>(rx_power_dbm.begin(), rx_power_dbm.end());
+            res["delay_spread_ns"] = std::vector<float>(delay_spread_ns.begin(), delay_spread_ns.end());
 
-            // Append ray visualizer paths to the JSON response
             crow::json::wvalue::list paths_json;
             for (const auto& p : ray_paths) {
                 crow::json::wvalue::list points_json;
                 for (const auto& pt : p.points) {
                     crow::json::wvalue::list coord;
-                    coord.push_back(pt[0]);
-                    coord.push_back(pt[1]);
-                    coord.push_back(pt[2]);
+                    coord.push_back(pt[0]); // X
+                    coord.push_back(pt[1]); // Y
+                    coord.push_back(pt[2]); // Z
+                    coord.push_back(pt[3]); // Pol X
+                    coord.push_back(pt[4]); // Pol Y
+                    coord.push_back(pt[5]); // Pol Z
                     points_json.push_back(coord);
                 }
                 paths_json.push_back(points_json);
             }
             res["ray_paths"] = std::move(paths_json);
 
-            // Provide the web-ui with the computed UTM values so it can accurately stitch the satellite map
             res["easting"] = easting;
             res["northing"] = northing;
             res["zone"] = zone;

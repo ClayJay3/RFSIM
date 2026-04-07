@@ -7,37 +7,25 @@
     <style>
         body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background: #111; color: white; }
         #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
-        #ui-panel { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(20, 20, 20, 0.85); padding: 20px; border-radius: 12px; width: 320px; border: 1px solid #333; max-height: 90vh; overflow-y: auto;}
+        #ui-panel { position: absolute; top: 20px; left: 20px; z-index: 10; background: rgba(20, 20, 20, 0.85); padding: 20px; border-radius: 12px; width: 340px; border: 1px solid #333; max-height: 90vh; overflow-y: auto;}
         h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
         
-        #ui-controls {
-            transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out;
-            overflow: hidden;
-            max-height: 1200px;
-            opacity: 1;
-            margin-top: 15px;
-        }
-        #ui-controls.collapsed {
-            max-height: 0;
-            opacity: 0;
-            margin-top: 0;
-        }
-        #collapse-icon {
-            font-size: 0.8rem;
-            color: #00ffcc;
-            transition: transform 0.3s ease;
-        }
+        #ui-controls { transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin 0.3s ease-out; overflow: hidden; max-height: 1500px; opacity: 1; margin-top: 15px; }
+        #ui-controls.collapsed { max-height: 0; opacity: 0; margin-top: 0; }
+        #collapse-icon { font-size: 0.8rem; color: #00ffcc; transition: transform 0.3s ease; }
+        #info-box { background: rgba(0,255,200,0.1); border-left: 4px solid #00ffcc; padding: 10px; font-size: 0.8rem; margin-bottom: 15px; display: none;}
 
         .control-group { margin-bottom: 12px; }
         label { display: block; font-size: 0.85rem; margin-bottom: 5px; color: #aaa; }
-        input[type="number"], input[type="text"], input[type="password"], select { width: 100%; padding: 8px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
+        input[type="number"], select { width: 100%; padding: 8px; background: #222; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
         input[type="checkbox"] { margin-right: 10px; cursor: pointer; }
         button { width: 100%; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
         button:hover { background: #0052a3; }
         button:disabled { background: #444; color: #888; cursor: not-allowed; }
         #loading { display: none; margin-top: 10px; font-size: 0.9rem; color: #00ffcc; text-align: center; }
+        
         #legend { position: absolute; bottom: 20px; right: 20px; z-index: 10; background: rgba(20, 20, 20, 0.85); padding: 15px; border-radius: 8px; border: 1px solid #333; }
-        .gradient-bar { width: 200px; height: 20px; border-radius: 4px; background: linear-gradient(to right, transparent, blue, cyan, yellow, red); margin-bottom: 5px; }
+        .gradient-bar { width: 250px; height: 20px; border-radius: 4px; background: linear-gradient(to right, transparent, blue, cyan, yellow, red); margin-bottom: 5px; }
         .legend-labels { display: flex; justify-content: space-between; font-size: 0.8rem; color: #ccc; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -52,6 +40,8 @@
         </h2>
         
         <div id="ui-controls">
+            <div id="info-box">ℹ️ Click anywhere on the 3D terrain to place a Receiver and visualize the 1st Fresnel Zone.</div>
+
             <div class="control-group">
                 <label>Location (Latitude, Longitude)</label>
                 <div style="display: flex; gap: 10px;">
@@ -69,32 +59,54 @@
             </div>
             <hr style="border-color:#444; margin:15px 0;">
             <div class="control-group"><label>Tx Frequency (MHz)</label><input type="number" id="freq" value="900"></div>
-            <div class="control-group"><label>Tx Height (m AGL)</label><input type="number" id="tx_h" value="10"></div>
-            <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="43"></div>
+            <div style="display: flex; gap: 10px;">
+                <div class="control-group"><label>Tx Height (m)</label><input type="number" id="tx_h" value="10"></div>
+                <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="43"></div>
+            </div>
             <div class="control-group"><label>Antenna Gain (dBi)</label><input type="number" id="tx_gain" value="18"></div>
             <div class="control-group"><label>Azimuth (deg)</label><input type="number" id="tx_az" value="180"></div>
-            <div class="control-group"><label>Downtilt (deg)</label><input type="number" id="tx_el" value="-5"></div>
-            <div class="control-group"><label>3dB Beamwidth</label><input type="number" id="beamwidth" value="65"></div>
-            
+            <div style="display: flex; gap: 10px;">
+                <div class="control-group"><label>Downtilt (deg)</label><input type="number" id="tx_el" value="-5"></div>
+                <div class="control-group"><label>Beamwidth (deg)</label><input type="number" id="beamwidth" value="65"></div>
+            </div>
+
             <hr style="border-color:#444; margin:15px 0;">
+            <div style="display: flex; gap: 10px;">
+                <div class="control-group"><label>Rx Sensitivity (dBm)</label><input type="number" id="rx_sens" value="-100"></div>
+                <div class="control-group"><label>Noise Floor (dBm)</label><input type="number" id="noise_floor" value="-105"></div>
+            </div>
+            <hr style="border-color:#444; margin:15px 0;">
+            
             <div class="control-group">
                 <label>Heatmap Opacity: <span id="opacity-val">0.7</span></label>
                 <input type="range" id="heatmap-opacity" min="0" max="1" step="0.1" value="0.7" oninput="updateOpacity(this.value)">
             </div>
-            <div class="control-group" style="display: flex; align-items: center;">
-                <input type="checkbox" id="viz-rays" checked>
-                <label style="margin-bottom: 0;">Visualize RF Propagation (Real-time)</label>
+            <div class="control-group">
+                <label>Heatmap Visualizer Mode:</label>
+                <select id="heatmap-mode" onchange="updateHeatmapTexture()">
+                    <option value="0">1. Static RF Power (dBm)</option>
+                    <option value="1">2. Basic Wavefront Reveal</option>
+                    <option value="2">3. Live Wave Interference</option>
+                    <option value="3">4. Delay Spread Fading (ns)</option>
+                    <option value="4" selected>5. Usable Data Rates (SNR)</option>
+                </select>
+            </div>
+            <div class="control-group" style="display: flex; align-items: center; margin-top: 10px;">
+                <input type="checkbox" id="viz-rays" checked onchange="toggleRays()">
+                <label style="margin-bottom: 0;">Show Ray Photons (Multipath)</label>
             </div>
 
-            <button id="sim-btn" onclick="runSimulation()">Run Volumetric Simulation</button>
+            <button id="sim-btn" onclick="runSimulation()" style="margin-top: 10px;">Run Volumetric Simulation</button>
             <div id="loading">Voxelizing LiDAR & Raymarching...</div>
         </div>
     </div>
 
     <div id="legend">
-        <div style="margin-bottom: 5px; font-size: 0.9rem;">Rx Power (dBm)</div>
-        <div class="gradient-bar"></div>
-        <div class="legend-labels"><span>&lt;-100</span><span>-85</span><span>-70</span><span>-55</span><span>&gt;-40</span></div>
+        <div id="legend-title" style="margin-bottom: 5px; font-size: 0.9rem;">Usable Link / Capacity</div>
+        <div class="gradient-bar" id="legend-bar" style="background: linear-gradient(to right, red, orange, yellow, rgb(136, 255, 0), rgb(0, 255, 0));"></div>
+        <div class="legend-labels" id="legend-labels">
+            <span>Dropped</span><span>Telem</span><span>Med</span><span>Video</span><span>Max</span>
+        </div>
     </div>
 
     <div id="canvas-container"></div>
@@ -119,13 +131,16 @@
         scene.add(dirLight);
 
         let terrainMesh = null, txMarker = null;
-        let heatmapMesh = null; 
+        let heatmapMesh = null, currentSimData = null; 
         
-        // Ray Animation Globals
+        // Advanced Viz Globals
         let activeRays = [];
-        let photonMesh = null;
-        let rayLinesMesh = null;
+        let photonMesh = null, rayLinesMesh = null;
         const dummyMatrix = new THREE.Object3D();
+        
+        let rxMarker = null, fresnelMesh = null;
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
 
         window.onload = async () => {
             const simBtn = document.getElementById('sim-btn');
@@ -147,6 +162,44 @@
             }
         };
 
+        // Fresnel Zone Terrain Interaction
+        window.addEventListener('click', (event) => {
+            if (event.target !== renderer.domElement || !terrainMesh || !txMarker) return;
+            
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            
+            const intersects = raycaster.intersectObject(terrainMesh);
+            if (intersects.length > 0) {
+                placeReceiver(intersects[0].point);
+            }
+        });
+
+        function placeReceiver(pos) {
+            if (!rxMarker) {
+                rxMarker = new THREE.Mesh(new THREE.BoxGeometry(2,2,2), new THREE.MeshPhongMaterial({color: 0xff0000}));
+                scene.add(rxMarker);
+            }
+            rxMarker.position.copy(pos).add(new THREE.Vector3(0, 1.5, 0)); 
+            
+            if (fresnelMesh) scene.remove(fresnelMesh);
+            
+            const dist = txMarker.position.distanceTo(rxMarker.position);
+            const freqHz = parseFloat(document.getElementById('freq').value) * 1e6;
+            const lambda = 299792458 / freqHz;
+            const r = Math.sqrt(lambda * dist) / 2.0;
+
+            const geo = new THREE.SphereGeometry(1, 32, 16);
+            const mat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.15, depthWrite: false });
+            fresnelMesh = new THREE.Mesh(geo, mat);
+            
+            fresnelMesh.position.copy(txMarker.position).lerp(rxMarker.position, 0.5);
+            fresnelMesh.lookAt(rxMarker.position);
+            fresnelMesh.scale.set(r, r, dist/2.0); 
+            scene.add(fresnelMesh);
+        }
+
         function toggleMenu() {
             const controls = document.getElementById('ui-controls');
             const icon = document.getElementById('collapse-icon');
@@ -154,50 +207,29 @@
             icon.innerText = controls.classList.contains('collapsed') ? '▶' : '▼';
         }
 
-        // Animation Loop handling Orbit Controls and Real-time Photons
-        function animate() { 
-            requestAnimationFrame(animate); 
-            controls.update(); 
-            
-            // RF Photon Real-Time Animation
-            if (photonMesh && activeRays.length > 0) {
-                const t = (Date.now() / 1000); // Animation timer
-                const speed = 250; // Metres per second
-                
-                for (let i = 0; i < activeRays.length; i++) {
-                    const ray = activeRays[i];
-                    // Stagger the start times to create a steady stream effect
-                    let progress = ((t * speed) + ray.staggerOffset) % ray.totalDist; 
-                    
-                    let currentPos = ray.segments[ray.segments.length - 1].end; // Default to end point
-                    for (let s of ray.segments) {
-                        if (progress >= s.accum && progress <= s.accum + s.dist) {
-                            let localP = (progress - s.accum) / s.dist;
-                            currentPos = new THREE.Vector3().copy(s.start).lerp(s.end, localP);
-                            break;
-                        }
-                    }
-                    dummyMatrix.position.copy(currentPos);
-                    dummyMatrix.updateMatrix();
-                    photonMesh.setMatrixAt(ray.id, dummyMatrix.matrix);
-                }
-                photonMesh.instanceMatrix.needsUpdate = true;
-            }
-
-            renderer.render(scene, camera); 
+        function toggleRays() {
+            const show = document.getElementById('viz-rays').checked;
+            if (photonMesh) photonMesh.visible = show;
+            if (rayLinesMesh) rayLinesMesh.visible = show;
         }
-        animate();
-        
-        window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 
-        function updateOpacity(val) {
-            document.getElementById('opacity-val').innerText = val;
-            if (heatmapMesh && heatmapMesh.material) {
-                heatmapMesh.material.opacity = parseFloat(val);
-            }
-            // Also dim the physical rayweb when lowering heatmap opacity
-            if (rayLinesMesh && rayLinesMesh.material) {
-                rayLinesMesh.material.opacity = Math.min(0.2, parseFloat(val));
+        function updateLegend(mode) {
+            const title = document.getElementById('legend-title');
+            const bar = document.getElementById('legend-bar');
+            const labels = document.getElementById('legend-labels');
+            
+            if (mode <= 2) {
+                title.innerText = "Rx Power (dBm)";
+                bar.style.background = "linear-gradient(to right, transparent, blue, cyan, yellow, red)";
+                labels.innerHTML = "<span>&lt;-100</span><span>-85</span><span>-70</span><span>-55</span><span>&gt;-40</span>";
+            } else if (mode === 3) {
+                title.innerText = "Delay Spread (Echo timing)";
+                bar.style.background = "linear-gradient(to right, blue, green, yellow, red)";
+                labels.innerHTML = "<span>LOS</span><span>125ns</span><span>250ns</span><span>375ns</span><span>&gt;500ns</span>";
+            } else if (mode === 4) {
+                title.innerText = "Usable Link / Capacity";
+                bar.style.background = "linear-gradient(to right, red, orange, yellow, #88ff00, #00ff00)";
+                labels.innerHTML = "<span>Dropped</span><span>Telem</span><span>Med</span><span>Video</span><span>Max</span>";
             }
         }
 
@@ -211,7 +243,120 @@
             return [r, g, b, 255];
         }
 
-        // ... [Fetch Stitch Satellite logic remains same] ...
+        // Dynamically repaints the terrain texture based on Physics/UI configuration
+        function updateHeatmapTexture() {
+            if (!currentSimData || !heatmapMesh) return;
+            const mode = parseInt(document.getElementById('heatmap-mode').value);
+            const texData = new Uint8Array(currentSimData.grid_w * currentSimData.grid_h * 4);
+            
+            const noiseFloor = parseFloat(document.getElementById('noise_floor').value) || -105;
+            const rxSens = parseFloat(document.getElementById('rx_sens').value) || -100;
+
+            updateLegend(mode);
+
+            for (let i = 0; i < currentSimData.heatmap_dbm.length; i++) {
+                let color = [0,0,0,0];
+                let dbm = currentSimData.heatmap_dbm[i];
+
+                if (dbm > -119.0) {
+                    if (mode <= 2) {
+                        color = dbmToColor(dbm);
+                    } else if (mode === 3) {
+                        let ds = currentSimData.delay_spread_ns[i];
+                        let t = Math.max(0, Math.min(1, ds / 500.0)); 
+                        if (t < 0.5) color = [0, Math.floor(t * 2 * 255), 255 - Math.floor(t * 2 * 100), 255]; 
+                        else color = [Math.floor((t - 0.5) * 2 * 255), 255 - Math.floor((t - 0.5) * 2 * 255), 0, 255];
+                        if (ds <= 0.1) color = [30, 255, 30, 255]; 
+                    } else if (mode === 4) {
+                        let snr = dbm - noiseFloor;
+                        
+                        if (dbm < rxSens || snr < 5) {
+                            color = [255, 30, 30, 255]; 
+                        } else if (snr < 12) {
+                            color = [255, 165, 0, 255]; 
+                        } else if (snr < 20) {
+                            color = [255, 255, 0, 255]; 
+                        } else if (snr < 28) {
+                            color = [136, 255, 0, 255]; 
+                        } else {
+                            color = [0, 255, 0, 255];   
+                        }
+                    }
+                }
+                texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; 
+                texData[i * 4 + 2] = color[2]; texData[i * 4 + 3] = color[3];
+            }
+
+            const heatmapTex = new THREE.DataTexture(texData, currentSimData.grid_w, currentSimData.grid_h, THREE.RGBAFormat);
+            heatmapTex.magFilter = THREE.LinearFilter; heatmapTex.minFilter = THREE.LinearFilter;
+            heatmapTex.needsUpdate = true;
+            
+            heatmapMesh.material.map = heatmapTex;
+            heatmapMesh.material.userData.heatmapMode.value = mode;
+            if (mode > 0) heatmapMesh.material.userData.time.value = 0; 
+        }
+
+        // Animation Loop handling Orbit Controls and Real-time Animations
+        function animate() { 
+            requestAnimationFrame(animate); 
+            controls.update(); 
+            
+            // RF Photon Real-Time Animation with Velocity Alignment
+            if (photonMesh && activeRays.length > 0) {
+                const t = (Date.now() / 1000); 
+                const speed = 250; 
+                
+                for (let i = 0; i < activeRays.length; i++) {
+                    const ray = activeRays[i];
+                    let progress = ((t * speed) + ray.staggerOffset) % ray.totalDist; 
+                    
+                    let currentPos = ray.segments[ray.segments.length - 1].end; 
+                    let currentDir = new THREE.Vector3(0, 1, 0); // fallback
+                    
+                    for (let s of ray.segments) {
+                        if (progress >= s.accum && progress <= s.accum + s.dist) {
+                            let localP = (progress - s.accum) / s.dist;
+                            currentPos = new THREE.Vector3().copy(s.start).lerp(s.end, localP);
+                            // Get the direction vector of the current line segment
+                            currentDir.subVectors(s.end, s.start).normalize();
+                            break;
+                        }
+                    }
+                    
+                    dummyMatrix.position.copy(currentPos);
+                    
+                    // BUGFIX: Orient the cylinder along the direction of travel (like a laser/tracer bullet)
+                    let target = new THREE.Vector3().copy(currentPos).add(currentDir);
+                    dummyMatrix.lookAt(target);
+                    dummyMatrix.rotateX(Math.PI / 2); 
+                    dummyMatrix.updateMatrix();
+                    
+                    photonMesh.setMatrixAt(ray.id, dummyMatrix.matrix);
+                }
+                photonMesh.instanceMatrix.needsUpdate = true;
+            }
+
+            // Custom Shader Propagation Loop
+            if (heatmapMesh && heatmapMesh.material.userData.time) {
+                const mode = heatmapMesh.material.userData.heatmapMode.value;
+                if (mode > 0 && mode < 3) {
+                    const t = (Date.now() % 10000) / 1000.0;
+                    heatmapMesh.material.userData.time.value = t; 
+                }
+            }
+
+            renderer.render(scene, camera); 
+        }
+        animate();
+        
+        window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+
+        function updateOpacity(val) {
+            document.getElementById('opacity-val').innerText = val;
+            if (heatmapMesh && heatmapMesh.material) heatmapMesh.material.opacity = parseFloat(val);
+            if (rayLinesMesh && rayLinesMesh.material) rayLinesMesh.material.opacity = Math.min(0.2, parseFloat(val));
+        }
+
         async function fetchStitchedSatellite(payload, projStr) {
             function lngLatToTile(lng, lat, z) {
                 const n = Math.pow(2, z);
@@ -283,6 +428,9 @@
 
         async function runSimulation() {
             document.getElementById('loading').style.display = 'block';
+            if (rxMarker) { scene.remove(rxMarker); rxMarker = null; }
+            if (fresnelMesh) { scene.remove(fresnelMesh); fresnelMesh = null; }
+
             const payload = {
                 lat: parseFloat(document.getElementById('lat').value),
                 lng: parseFloat(document.getElementById('lng').value),
@@ -301,6 +449,8 @@
                 const response = await fetch('/api/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if(!response.ok) { alert(await response.text()); return; }
                 const data = await response.json();
+                currentSimData = data;
+                document.getElementById('info-box').style.display = 'block';
                 
                 const projStr = `+proj=utm +zone=${data.zone} ${data.hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
                 
@@ -389,43 +539,142 @@
             scene.add(terrainMesh);
 
 
-            // 2. Overlay Layer 1: RF Heatmap Texture
-            const texData = new Uint8Array(data.grid_w * data.grid_h * 4);
-            for (let i = 0; i < data.heatmap_dbm.length; i++) {
-                if (data.heatmap_dbm[i] <= -119.0) {
-                    texData[i * 4] = 0; texData[i * 4 + 1] = 0; texData[i * 4 + 2] = 0; texData[i * 4 + 3] = 0;
-                } else {
-                    const color = dbmToColor(data.heatmap_dbm[i]);
-                    texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; texData[i * 4 + 2] = color[2]; texData[i * 4 + 3] = color[3];
-                }
-            }
-            const heatmapTex = new THREE.DataTexture(texData, data.grid_w, data.grid_h, THREE.RGBAFormat);
-            heatmapTex.magFilter = THREE.LinearFilter; heatmapTex.minFilter = THREE.LinearFilter;
-            heatmapTex.needsUpdate = true;
+            // 2. Extract Virtual Antennas (Reflection Points) for Interference Shader
+            let sources = [];
+            let srcDists = [];
+            
+            if (data.ray_paths && data.ray_paths.length > 0) {
+                let txPt = data.ray_paths[0][0];
+                let txVec = utmToVector3(txPt[0], txPt[1], txPt[2], params, data);
+                sources.push(txVec);
+                srcDists.push(0.0);
 
-            const currentOpacity = parseFloat(document.getElementById('heatmap-opacity').value);
+                for (let i = 0; i < data.ray_paths.length; i++) {
+                    if (sources.length >= 16) break;
+                    let path = data.ray_paths[i];
+                    if (path.length > 1) {
+                        let bouncePt = path[1]; 
+                        let bounceVec = utmToVector3(bouncePt[0], bouncePt[1], bouncePt[2], params, data);
+                        let distinct = true;
+                        for (let s of sources) {
+                            if (s.distanceTo(bounceVec) < 15.0) { distinct = false; break; }
+                        }
+                        if (distinct) {
+                            sources.push(bounceVec);
+                            srcDists.push(txVec.distanceTo(bounceVec));
+                        }
+                    }
+                }
+            } else {
+                sources.push(new THREE.Vector3(0, params.tx_height, 0));
+                srcDists.push(0);
+            }
+            const activeSourcesCount = sources.length;
+            while (sources.length < 16) { sources.push(new THREE.Vector3(0,0,0)); srcDists.push(0.0); }
+
+
+            // 3. Overlay Layer 1: RF Data Texture
             const heatmapMat = new THREE.MeshPhongMaterial({ 
-                map: heatmapTex, 
                 color: 0xffffff, 
                 side: THREE.DoubleSide,
                 transparent: true,
-                opacity: currentOpacity,
+                opacity: parseFloat(document.getElementById('heatmap-opacity').value),
                 depthWrite: false, 
                 polygonOffset: true,
                 polygonOffsetFactor: -1, 
                 polygonOffsetUnits: -1
             });
             
+            heatmapMat.userData = {
+                time: { value: 0.0 },
+                heatmapMode: { value: parseInt(document.getElementById('heatmap-mode').value) },
+                sources: { value: sources },
+                srcDists: { value: srcDists },
+                numSources: { value: activeSourcesCount }
+            };
+
+            heatmapMat.onBeforeCompile = (shader) => {
+                shader.uniforms.time = heatmapMat.userData.time;
+                shader.uniforms.heatmapMode = heatmapMat.userData.heatmapMode;
+                shader.uniforms.sources = heatmapMat.userData.sources;
+                shader.uniforms.srcDists = heatmapMat.userData.srcDists;
+                shader.uniforms.numSources = heatmapMat.userData.numSources;
+                
+                shader.vertexShader = `varying vec3 vLocalPos;\n` + shader.vertexShader;
+                shader.vertexShader = shader.vertexShader.replace(
+                    `#include <begin_vertex>`,
+                    `#include <begin_vertex>\nvLocalPos = position;`
+                );
+
+                shader.fragmentShader = `
+                    uniform float time;
+                    uniform float heatmapMode;
+                    uniform vec3 sources[16];
+                    uniform float srcDists[16];
+                    uniform int numSources;
+                    varying vec3 vLocalPos;
+                ` + shader.fragmentShader;
+
+                shader.fragmentShader = shader.fragmentShader.replace(
+                    `#include <map_fragment>`,
+                    `
+                    #include <map_fragment>
+                    
+                    if (heatmapMode > 0.5 && heatmapMode < 1.5) {
+                        float dist = distance(vLocalPos, sources[0]); 
+                        float currentRadius = time * 75.0; 
+                        
+                        float mask = smoothstep(currentRadius, currentRadius - 5.0, dist);
+                        float edge = smoothstep(currentRadius - 4.0, currentRadius, dist) * smoothstep(currentRadius + 2.0, currentRadius, dist);
+                        
+                        diffuseColor.a *= mask;
+                        diffuseColor.rgb += vec3(edge * 1.5);
+                    } 
+                    else if (heatmapMode > 1.5 && heatmapMode < 2.5) {
+                        float waveSum = 0.0;
+                        float currentRadius = time * 75.0; 
+                        float lambda = 8.0;
+                        float k = 6.28318 / lambda;
+                        
+                        float primaryDist = distance(vLocalPos, sources[0]);
+                        
+                        if (primaryDist < currentRadius) {
+                            for(int i = 0; i < 16; i++) {
+                                if (i >= numSources) break;
+                                float d = distance(vLocalPos, sources[i]);
+                                float totalTravel = srcDists[i] + d;
+                                
+                                if (totalTravel < currentRadius) {
+                                    float amp = (i == 0) ? 1.0 : 0.6; 
+                                    amp /= (d * 0.1 + 1.0);
+                                    float phase = k * totalTravel - (k * currentRadius);
+                                    waveSum += amp * sin(phase);
+                                }
+                            }
+                            float interferenceIntensity = clamp((waveSum * 1.5) + 0.5, 0.0, 2.0);
+                            diffuseColor.rgb *= interferenceIntensity;
+                        } else {
+                            diffuseColor.a = 0.0; 
+                        }
+                    }
+                    `
+                );
+            };
+
             heatmapMesh = new THREE.Mesh(geom, heatmapMat);
             terrainMesh.add(heatmapMesh);
+            
+            // Generate the dynamic initial texture
+            updateHeatmapTexture();
 
-            // 3. Setup RF Animation Overlays
+            // 4. Setup Photon Tracers (Now uses Cylinders pointing in the direction of travel)
             activeRays = [];
-            if (document.getElementById('viz-rays').checked && data.ray_paths) {
+            if (data.ray_paths) {
+                const showRays = document.getElementById('viz-rays').checked;
                 const linePos = [];
-                // Instanced Mesh allows rendering 1000 spheres in 1 single draw call
-                const photonGeo = new THREE.SphereGeometry(1.0, 8, 8);
-                const photonMat = new THREE.MeshBasicMaterial({color: 0x00ffff}); // Bright Cyan
+                // Use a thin elongated cylinder to visually represent the tracer bolt
+                const photonGeo = new THREE.CylinderGeometry(0.2, 0.2, 4.0, 8);
+                const photonMat = new THREE.MeshBasicMaterial({color: 0x00ffff});
                 photonMesh = new THREE.InstancedMesh(photonGeo, photonMat, data.ray_paths.length);
                 
                 data.ray_paths.forEach((path, i) => {
@@ -443,25 +692,22 @@
                         segments.push({start: pts[j], end: pts[j+1], dist: d, accum: totalDist});
                         totalDist += d;
                     }
-                    // Random stagger offset so photons emit as a constant stream rather than all at once
                     activeRays.push({segments: segments, totalDist: totalDist, id: i, staggerOffset: Math.random() * 500});
                 });
                 
-                // Draw faint web of ray paths to show multipath environment clearly
                 const lineGeo = new THREE.BufferGeometry();
                 lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3));
-                const lineMat = new THREE.LineBasicMaterial({
-                    color: 0x00ffff, 
-                    transparent: true, 
-                    opacity: 0.15, // Keep faint so it doesn't overwhelm heatmap
-                    blending: THREE.AdditiveBlending
-                });
+                const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending });
                 rayLinesMesh = new THREE.LineSegments(lineGeo, lineMat);
+                
+                photonMesh.visible = showRays;
+                rayLinesMesh.visible = showRays;
+
                 scene.add(rayLinesMesh);
                 scene.add(photonMesh);
             }
 
-            // 4. Add Antenna Marker
+            // 5. Add Antenna Marker
             txMarker = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, params.tx_height), new THREE.MeshBasicMaterial({ color: 0xffffff }));
             let centerIdx = Math.floor(data.grid_h/2) * data.grid_w + Math.floor(data.grid_w/2);
             let groundH = data.surface_heights[centerIdx] - data.min_alt;
