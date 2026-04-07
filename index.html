@@ -96,6 +96,7 @@
                     <option value="2">3. Live Wave Interference</option>
                     <option value="3">4. Delay Spread Fading (ns)</option>
                     <option value="4" selected>5. Usable Data Rates (SNR)</option>
+                    <option value="5">6. Deadspot Avoidance Warning</option>
                 </select>
             </div>
             <div class="control-group" style="display: flex; align-items: center; margin-top: 10px;">
@@ -244,6 +245,10 @@
                 title.innerText = "Usable Link / Capacity";
                 bar.style.background = "linear-gradient(to right, red, orange, yellow, #88ff00, #00ff00)";
                 labels.innerHTML = "<span>Dropped</span><span>Telem</span><span>Med</span><span>Video</span><span>Max</span>";
+            } else if (mode === 5) {
+                title.innerText = "Deadspot Avoidance Warning";
+                bar.style.background = "linear-gradient(to right, red, magenta, rgba(0,255,0,0.5))";
+                labels.innerHTML = "<span>No Signal (Drop)</span><span>High Echo (Fading)</span><span>Clear / Usable</span>";
             }
         }
 
@@ -288,6 +293,23 @@
                         else if (snr < 20) color = [255, 255, 0, 255]; 
                         else if (snr < 28) color = [136, 255, 0, 255]; 
                         else color = [0, 255, 0, 255];   
+                    } else if (mode === 5) {
+                        let snr = dbm - noiseFloor;
+                        let ds = currentSimData.delay_spread_ns[i];
+                        
+                        if (dbm < rxSens || snr < 5) {
+                            // Primary Deadspot: Connection dropped due to low power or extreme noise
+                            color = [255, 30, 30, 255]; 
+                        } else if (ds > 250.0) {
+                            // Secondary Deadspot: Severe multipath interference causing data corruption
+                            color = [255, 0, 255, 255]; 
+                        } else if (snr < 12) {
+                            // Warning: Marginal signal on the edge of becoming a deadspot
+                            color = [255, 165, 0, 150];
+                        } else {
+                            // Clear: Solid connection. Rendered faintly to highlight the deadspots
+                            color = [0, 255, 0, 40]; 
+                        }
                     }
                 }
                 texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; 
