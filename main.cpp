@@ -14,7 +14,7 @@
 struct Point3D { float e, n, a; int cls; };
 
 struct RayPath {
-    std::vector<std::vector<float>> points; // {e, a, n, px, py, pz}
+    std::vector<std::vector<float>> points; 
 };
 
 inline Vec3 cross_prod(Vec3 a, Vec3 b) { 
@@ -26,32 +26,19 @@ inline Vec3 normalize(Vec3 a) {
     return l > 0 ? Vec3{a.x/l, a.y/l, a.z/l} : a;
 }
 
-// Helper to get DB connection safely and prevent duplication
 sqlite3* get_db_connection() {
     sqlite3* db;
-    // Check current directory first, EXPLICITLY requesting Read-Only access to avoid Docker permission errors
     int rc = sqlite3_open_v2("terrain.db", &db, SQLITE_OPEN_READONLY, nullptr);
     if (rc != SQLITE_OK) {
-        // Fallback: Check parent directory if running from the build/ folder
         rc = sqlite3_open_v2("../terrain.db", &db, SQLITE_OPEN_READONLY, nullptr);
         if (rc != SQLITE_OK) {
             std::cerr << "[ERROR] Failed to open terrain.db. SQLite error code: " << rc << std::endl;
-            if (db) {
-                std::cerr << "[ERROR] SQLite extended error: " << sqlite3_errmsg(db) << std::endl;
-                sqlite3_close(db);
-            }
-            std::cerr << "[ERROR] Please ensure terrain.db is located in the project root directory!" << std::endl;
             return nullptr;
-        } else {
-            std::cout << "[INFO] Successfully opened ../terrain.db (root directory) in Read-Only mode." << std::endl;
-        }
-    } else {
-        std::cout << "[INFO] Successfully opened terrain.db in Read-Only mode." << std::endl;
-    }
+        } 
+    } 
     return db;
 }
 
-// Function to pull LiDAR from your custom SQLite DB and build a 3D Voxel Grid
 bool build_voxel_grid(
     float center_e, float center_n, float radius, float cell_size,
     std::vector<uint8_t>& voxel_data, VoxelGrid& grid_info, std::vector<float>& surface_heightmap) 
@@ -59,7 +46,6 @@ bool build_voxel_grid(
     sqlite3* db = get_db_connection();
     if (!db) return false;
 
-    // Utilizing the R-Tree virtual index for blazing-fast spatial bounding-box lookups
     std::string q = "SELECT p.easting, p.northing, p.altitude, p.class_code "
                     "FROM ProcessedLiDARPoints_idx AS idx "
                     "JOIN ProcessedLiDARPoints AS p ON p.id = idx.id "
@@ -88,26 +74,18 @@ bool build_voxel_grid(
     sqlite3_finalize(stmt);
     sqlite3_close(db);
 
-    std::cout << "[INFO] Successfully closed terrain.db. Fetched " << points.size() << " LiDAR points for this bounding box." << std::endl;
+    if (points.empty()) return false;
 
-    if (points.empty()) {
-        std::cerr << "[WARNING] 0 LiDAR points found in the specified radius! Check your coordinates." << std::endl;
-        return false;
-    }
-
-    // Define Grid Dimensions
     grid_info.min_x = center_e - radius;
     grid_info.min_z = center_n - radius;
     grid_info.min_y = min_alt;
     grid_info.cell_size = cell_size;
-    
     grid_info.dim_x = ceil((radius * 2.0f) / cell_size);
     grid_info.dim_z = ceil((radius * 2.0f) / cell_size);
     grid_info.dim_y = ceil((max_alt - min_alt) / cell_size) + 1;
 
     voxel_data.assign(grid_info.dim_x * grid_info.dim_y * grid_info.dim_z, 0);
     
-    // Fill Voxels
     for (const auto& p : points) {
         int gx = (p.e - grid_info.min_x) / cell_size;
         int gz = (p.n - grid_info.min_z) / cell_size;
@@ -121,7 +99,6 @@ bool build_voxel_grid(
 
     grid_info.data = voxel_data.data();
 
-    // Generate a lightweight 2.5D top-surface heightmap to send to the web browser
     surface_heightmap.assign(grid_info.dim_x * grid_info.dim_z, min_alt);
     for (int x = 0; x < grid_info.dim_x; x++) {
         for (int z = 0; z < grid_info.dim_z; z++) {
@@ -134,13 +111,9 @@ bool build_voxel_grid(
             }
         }
     }
-
     return true;
 }
 
-// ------------------------------------------------------------------
-// Real-time Visualizer CPU Raymarcher (Polarization added)
-// ------------------------------------------------------------------
 std::vector<RayPath> generate_visualization_rays(
     const SimParams& params, 
     const VoxelGrid& grid, 
@@ -156,13 +129,10 @@ std::vector<RayPath> generate_visualization_rays(
 
     for (int i = 0; i < num_rays; ++i) {
         RayPath path;
-        
         float az = base_az + dis_angle(gen);
         float el = base_el + dis_angle(gen);
-        
         Vec3 ray_dir = { sinf(az) * cosf(el), sinf(el), cosf(az) * cosf(el) };
         
-        // Calculate initial Vertical E-Field Polarization
         Vec3 up = {0, 1, 0};
         Vec3 right = cross_prod(ray_dir, up);
         if (length(right) < 0.001f) right = {1, 0, 0};
@@ -219,11 +189,9 @@ std::vector<RayPath> generate_visualization_rays(
             path.points.push_back({cur_x, cur_y, cur_z, pol.x, pol.y, pol.z});
             if (!hit) break; 
             
-            // Vector Reflection for Ray Direction
             float dot_dir = ray_dir.x * hit_normal.x + ray_dir.y * hit_normal.y + ray_dir.z * hit_normal.z;
             ray_dir = {ray_dir.x - 2.0f * dot_dir * hit_normal.x, ray_dir.y - 2.0f * dot_dir * hit_normal.y, ray_dir.z - 2.0f * dot_dir * hit_normal.z};
             
-            // Mathematically twist Polarization Vector upon reflection
             float dot_pol = pol.x * hit_normal.x + pol.y * hit_normal.y + pol.z * hit_normal.z;
             pol = {pol.x - 2.0f * dot_pol * hit_normal.x, pol.y - 2.0f * dot_pol * hit_normal.y, pol.z - 2.0f * dot_pol * hit_normal.z};
             pol = normalize(pol);
@@ -238,7 +206,7 @@ std::vector<RayPath> generate_visualization_rays(
 }
 
 int main() {
-    GDALAllRegister(); // Initialize GDAL for coordinate transformations
+    GDALAllRegister(); 
     crow::SimpleApp app;
 
     CROW_ROUTE(app, "/")([]() {
@@ -256,18 +224,14 @@ int main() {
         sqlite3* db = get_db_connection();
         if (!db) return crow::response(500, "Database not found");
 
-        // Efficient center extraction via temporal sampling
         sqlite3_stmt* stmt_max;
         long long max_id = 0;
         if (sqlite3_prepare_v2(db, "SELECT MAX(id) FROM ProcessedLiDARPoints", -1, &stmt_max, nullptr) == SQLITE_OK) {
-            if (sqlite3_step(stmt_max) == SQLITE_ROW) {
-                max_id = sqlite3_column_int64(stmt_max, 0);
-            }
+            if (sqlite3_step(stmt_max) == SQLITE_ROW) max_id = sqlite3_column_int64(stmt_max, 0);
             sqlite3_finalize(stmt_max);
         }
 
         double easting = 0, northing = 0;
-
         if (max_id > 0) {
             std::string q_center;
             if (max_id <= 1000) {
@@ -308,7 +272,6 @@ int main() {
             }
             sqlite3_finalize(stmt_zone);
         }
-        
         sqlite3_close(db);
 
         int zone = 15;
@@ -324,22 +287,19 @@ int main() {
         OGRSpatialReference utm_srs;
         utm_srs.SetWellKnownGeogCS("WGS84");
         utm_srs.SetUTM(zone, is_north);
-
         OGRSpatialReference wgs84_srs;
         wgs84_srs.SetWellKnownGeogCS("WGS84");
         wgs84_srs.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER); 
 
         OGRCoordinateTransformation *poCT = OGRCreateCoordinateTransformation(&utm_srs, &wgs84_srs);
-        double lon = easting;
-        double lat = northing;
+        double lon = easting, lat = northing;
         if (poCT) {
             poCT->Transform(1, &lon, &lat);
             OCTDestroyCoordinateTransformation(poCT);
         }
 
         crow::json::wvalue res;
-        res["lat"] = lat;
-        res["lng"] = lon;
+        res["lat"] = lat; res["lng"] = lon;
         return crow::response(res);
     });
 
@@ -352,6 +312,7 @@ int main() {
             double lng = body.has("lng") ? body["lng"].d() : -91.0;
             float radius = body.has("radius") ? body["radius"].d() : 100.0;
             float voxel_res = body.has("resolution") ? body["resolution"].d() : 2.0;
+            int max_bounces = body.has("max_bounces") ? body["max_bounces"].i() : 3;
             
             int zone = std::floor((lng + 180.0) / 6.0) + 1;
             bool is_north = lat >= 0.0;
@@ -359,14 +320,12 @@ int main() {
             OGRSpatialReference wgs84_srs;
             wgs84_srs.SetWellKnownGeogCS("WGS84");
             wgs84_srs.SetAxisMappingStrategy(OAMS_TRADITIONAL_GIS_ORDER);
-
             OGRSpatialReference utm_srs;
             utm_srs.SetWellKnownGeogCS("WGS84");
             utm_srs.SetUTM(zone, is_north);
 
             OGRCoordinateTransformation *poCT = OGRCreateCoordinateTransformation(&wgs84_srs, &utm_srs);
-            double easting = lng;
-            double northing = lat;
+            double easting = lng, northing = lat;
             if (poCT) {
                 poCT->Transform(1, &easting, &northing);
                 OCTDestroyCoordinateTransformation(poCT);
@@ -379,14 +338,13 @@ int main() {
             float tx_el = body.has("tx_elevation") ? body["tx_elevation"].d() : -2.0;
             float tx_gain = body.has("tx_gain") ? body["tx_gain"].d() : 18.0;
             float beamwidth = body.has("beamwidth") ? body["beamwidth"].d() : 65.0;
-            int max_bounces = body.has("max_bounces") ? body["max_bounces"].i() : 3;
 
             std::vector<uint8_t> voxel_data;
             VoxelGrid grid_info;
             std::vector<float> surface_mesh;
 
             if (!build_voxel_grid(easting, northing, radius, voxel_res, voxel_data, grid_info, surface_mesh)) {
-                return crow::response(400, "No LiDAR points found in this area. Check your DB and coordinates.");
+                return crow::response(400, "No LiDAR points found in this area.");
             }
 
             float center_ground = surface_mesh[(grid_info.dim_z/2) * grid_info.dim_x + (grid_info.dim_x/2)];
@@ -410,12 +368,10 @@ int main() {
             params.max_bounces = max_bounces; 
             params.ray_count = 500000; 
 
-            // 1. Run actual heavy CUDA simulation (Now extracts Delay Spread too!)
             std::vector<float> rx_power_dbm;
             std::vector<float> delay_spread_ns;
             run_rf_simulation(grid_info, params, rx_power_dbm, delay_spread_ns);
 
-            // 2. Run CPU visualizer generation
             std::vector<RayPath> ray_paths = generate_visualization_rays(params, grid_info, voxel_data, 1000);
 
             crow::json::wvalue res;
@@ -423,7 +379,6 @@ int main() {
             res["grid_h"] = grid_info.dim_z;
             res["cell_size"] = grid_info.cell_size;
             res["min_alt"] = grid_info.min_y;
-            
             res["surface_heights"] = surface_mesh;
             res["heatmap_dbm"] = std::vector<float>(rx_power_dbm.begin(), rx_power_dbm.end());
             res["delay_spread_ns"] = std::vector<float>(delay_spread_ns.begin(), delay_spread_ns.end());
@@ -433,22 +388,15 @@ int main() {
                 crow::json::wvalue::list points_json;
                 for (const auto& pt : p.points) {
                     crow::json::wvalue::list coord;
-                    coord.push_back(pt[0]); // X
-                    coord.push_back(pt[1]); // Y
-                    coord.push_back(pt[2]); // Z
-                    coord.push_back(pt[3]); // Pol X
-                    coord.push_back(pt[4]); // Pol Y
-                    coord.push_back(pt[5]); // Pol Z
+                    coord.push_back(pt[0]); coord.push_back(pt[1]); coord.push_back(pt[2]); 
+                    coord.push_back(pt[3]); coord.push_back(pt[4]); coord.push_back(pt[5]); 
                     points_json.push_back(coord);
                 }
                 paths_json.push_back(points_json);
             }
             res["ray_paths"] = std::move(paths_json);
-
-            res["easting"] = easting;
-            res["northing"] = northing;
-            res["zone"] = zone;
-            res["hem"] = is_north ? "N" : "S";
+            res["easting"] = easting; res["northing"] = northing;
+            res["zone"] = zone; res["hem"] = is_north ? "N" : "S";
 
             return crow::response(res);
         } catch (const std::exception& e) {

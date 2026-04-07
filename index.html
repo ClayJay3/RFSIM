@@ -54,7 +54,7 @@
             </div>
             <div class="control-group">
                 <label>Simulation Radius (m)</label>
-                <input type="number" id="radius" value="150" step="50">
+                <input type="number" id="radius" value="1000" step="50">
             </div>
             <div class="control-group">
                 <label>Voxel Resolution (m)</label>
@@ -62,13 +62,13 @@
             </div>
             <div class="control-group">
                 <label>Max Ray Bounces</label>
-                <input type="number" id="max_bounces" value="3" min="0" max="10" step="1">
+                <input type="number" id="max_bounces" value="10" min="0" max="10" step="1">
             </div>
             <hr style="border-color:#444; margin:15px 0;">
             <div class="control-group"><label>Tx Frequency (MHz)</label><input type="number" id="freq" value="900"></div>
             <div style="display: flex; gap: 10px;">
-                <div class="control-group"><label>Tx Height (m)</label><input type="number" id="tx_h" value="10"></div>
-                <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="43"></div>
+                <div class="control-group"><label>Tx Height (m)</label><input type="number" id="tx_h" value="2"></div>
+                <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="28"></div>
             </div>
             <div class="control-group"><label>Antenna Gain (dBi)</label><input type="number" id="tx_gain" value="18"></div>
             <div class="control-group"><label>Azimuth (deg)</label><input type="number" id="tx_az" value="180"></div>
@@ -93,7 +93,7 @@
                 <select id="heatmap-mode" onchange="updateHeatmapTexture()">
                     <option value="0">1. Total Incoherent RF Power (dBm)</option>
                     <option value="1">2. Basic Wavefront Reveal</option>
-                    <option value="2">3. Deygout Diff + SBR Interf.</option>
+                    <option value="2">3. Live Wave Interference</option>
                     <option value="3">4. Delay Spread Fading (ns)</option>
                     <option value="4" selected>5. Usable Data Rates (SNR)</option>
                 </select>
@@ -109,6 +109,7 @@
             <div class="engine-notes">
                 <b>Physics Engine State</b><br>
                 Summation: <span>Incoherent Ray-Tube Area</span><br>
+                Artifacts: <span>Gaussian Ray Splatting</span><br>
                 Diffraction: <span>Deygout 3-Edge Method</span><br>
                 Materials: <span>ITU-R P.2040 Vector Polarized</span><br>
                 Foliage: <span>Weissberger's MED Model</span>
@@ -236,7 +237,7 @@
                 bar.style.background = "linear-gradient(to right, transparent, blue, cyan, yellow, red)";
                 labels.innerHTML = "<span>&lt;-100</span><span>-85</span><span>-70</span><span>-55</span><span>&gt;-40</span>";
             } else if (mode === 3) {
-                title.innerText = "Delay Spread (Excess ns)";
+                title.innerText = "Delay Spread (Echo timing)";
                 bar.style.background = "linear-gradient(to right, blue, green, yellow, red)";
                 labels.innerHTML = "<span>LOS</span><span>125ns</span><span>250ns</span><span>375ns</span><span>&gt;500ns</span>";
             } else if (mode === 4) {
@@ -278,7 +279,8 @@
                         let t = Math.max(0, Math.min(1, ds / 500.0)); 
                         if (t < 0.5) color = [0, Math.floor(t * 2 * 255), 255 - Math.floor(t * 2 * 100), 255]; 
                         else color = [Math.floor((t - 0.5) * 2 * 255), 255 - Math.floor((t - 0.5) * 2 * 255), 0, 255];
-                        if (ds <= 0.1) color = [30, 30, 255, 255];
+                        // FIX applied: 0ns maps to blue
+                        if (ds <= 0.1) color = [30, 30, 255, 255]; 
                     } else if (mode === 4) {
                         let snr = dbm - noiseFloor;
                         if (dbm < rxSens || snr < 5) color = [255, 30, 30, 255]; 
@@ -330,6 +332,7 @@
                     dummyMatrix.lookAt(target);
                     dummyMatrix.rotateX(Math.PI / 2); 
                     dummyMatrix.updateMatrix();
+                    
                     photonMesh.setMatrixAt(ray.id, dummyMatrix.matrix);
                 }
                 photonMesh.instanceMatrix.needsUpdate = true;
@@ -339,6 +342,7 @@
                 const mode = heatmapMesh.material.userData.heatmapMode.value;
                 if (mode > 0 && mode < 3) heatmapMesh.material.userData.time.value = (Date.now() % 10000) / 1000.0;
             }
+
             renderer.render(scene, camera); 
         }
         animate();
@@ -405,7 +409,6 @@
 
             const canvas_tl_lnglat = tileToLngLat(tlTile.x, tlTile.y, z);
             const canvas_br_lnglat = tileToLngLat(brTile.x + 1, brTile.y + 1, z);
-
             const canvas_tl_utm = proj4('WGS84', projStr, canvas_tl_lnglat);
             const canvas_br_utm = proj4('WGS84', projStr, canvas_br_lnglat);
 
@@ -447,9 +450,8 @@
                 const projStr = `+proj=utm +zone=${data.zone} ${data.hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
                 
                 let satTileData = null;
-                try {
-                    satTileData = await fetchStitchedSatellite({ easting: data.easting, northing: data.northing, radius: payload.radius }, projStr);
-                } catch(e) { console.error("Failed to fetch satellite tiles", e); }
+                try { satTileData = await fetchStitchedSatellite({ easting: data.easting, northing: data.northing, radius: payload.radius }, projStr); } 
+                catch(e) { console.error("Failed to fetch satellite tiles", e); }
                 
                 renderResults(data, {
                     easting: data.easting, northing: data.northing, radius: payload.radius,
@@ -513,7 +515,7 @@
                 sources.push(txVec); srcDists.push(0.0);
 
                 for (let i = 0; i < data.ray_paths.length; i++) {
-                    if (sources.length >= 16) break;
+                    if (sources.length >= 500) break;
                     let path = data.ray_paths[i];
                     if (path.length > 1) {
                         let bounceVec = utmToVector3(path[1][0], path[1][1], path[1][2], params, data);
@@ -562,7 +564,7 @@
                     else if (heatmapMode > 1.5 && heatmapMode < 2.5) {
                         float waveSum = 0.0;
                         float currentRadius = time * 75.0; 
-                        float k = 6.28318 / 8.0; // Assume proxy wavelength for viz
+                        float k = 6.28318 / 8.0; 
                         if (distance(vLocalPos, sources[0]) < currentRadius) {
                             for(int i = 0; i < 16; i++) {
                                 if (i >= numSources) break;

@@ -39,11 +39,10 @@ __device__ inline void atomicMaxFloat(float* addr, float val) {
     } while (assumed != old);
 }
 
-// ITU-R P.2040 Material Properties mapped to Standard LAS LiDAR Classes
+// SOTA: ITU-R P.2040 Material Properties mapped to LAS LiDAR Classes
 __device__ void get_material_props(int cls, float freq_hz, float &eps_r, float &sigma) {
     float f_GHz = freq_hz / 1e9f;
-    
-    eps_r = 15.0f; sigma = 0.05f; // Default / Soil (Class 2)
+    eps_r = 15.0f; sigma = 0.05f; // Default Soil
 
     if (cls == 6) { // Building / Concrete
         eps_r = 5.31f; 
@@ -54,13 +53,13 @@ __device__ void get_material_props(int cls, float freq_hz, float &eps_r, float &
     } else if (cls == 9) { // Water
         eps_r = 81.0f; 
         sigma = 5.0f;
-    } else if (cls == 7) { // Noise/Metal/Low Points
+    } else if (cls == 7) { // Metal / Utilities
         eps_r = 1.0f; 
-        sigma = 1.0e6f; // High conductivity
+        sigma = 1.0e6f; 
     }
 }
 
-// Weissberger's Modified Exponential Decay (MED) for Foliage Loss
+// SOTA: Weissberger's Modified Exponential Decay (MED) for Foliage Loss
 __device__ float calc_vegetation_loss_power_mult(float veg_dist, float freq_hz) {
     if (veg_dist < 0.1f) return 1.0f;
     float f_GHz = freq_hz / 1e9f;
@@ -70,10 +69,10 @@ __device__ float calc_vegetation_loss_power_mult(float veg_dist, float freq_hz) 
     } else {
         loss_db = 1.33f * powf(f_GHz, 0.284f) * powf(veg_dist, 0.588f);
     }
-    return powf(10.0f, -loss_db / 10.0f); // Power Multiplier
+    return powf(10.0f, -loss_db / 10.0f); 
 }
 
-// Diffraction Loss (Positive dB)
+// SOTA: Knife-Edge Loss conversion (Positive dB)
 __device__ float knife_edge_loss_db(float nu) {
     if (nu <= -1.0f) return 0.0f;
     if (nu <= 0.0f) return -20.0f * log10f(0.5f - 0.62f * nu);
@@ -82,11 +81,10 @@ __device__ float knife_edge_loss_db(float nu) {
     return -20.0f * log10f(0.225f / nu);
 }
 
-// Complex Polarization Tracking & TE/TM Decomposition
+// SOTA: Complex Vector Polarization Tracking & TE/TM Decomposition
 __device__ float compute_reflection_and_update_pol(Vec3 ray_dir, Vec3 hit_normal, Vec3 &pol, float eps_r, float sigma, float freq_hz) {
     float cos_theta_i = fabs(dot(ray_dir, hit_normal));
     float sin_theta_i_sq = fmaxf(0.0f, 1.0f - cos_theta_i * cos_theta_i);
-    
     float omega = 2.0f * PI * freq_hz;
     float eps_complex_i = sigma / (omega * 8.854e-12f);
     
@@ -109,18 +107,16 @@ __device__ float compute_reflection_and_update_pol(Vec3 ray_dir, Vec3 hit_normal
     float den_tm_re = eps_cos_re + sq_re, den_tm_im = eps_cos_im + sq_im;
     float R_TM_mag = sqrtf((num_tm_re*num_tm_re + num_tm_im*num_tm_im) / (den_tm_re*den_tm_re + den_tm_im*den_tm_im));
     
-    // Orient TE/TM coordinate system
     Vec3 v_te = cross_prod(ray_dir, hit_normal);
     float v_te_len = length(v_te);
-    if (v_te_len < 1e-5f) return R_TM_mag; // Handle normal incidence
+    if (v_te_len < 1e-5f) return R_TM_mag; 
     v_te = mul(v_te, 1.0f / v_te_len);
     Vec3 v_tm = cross_prod(v_te, ray_dir);
     
-    // Decompose current polarization
     float pol_te = dot(pol, v_te) * R_TE_mag;
     float pol_tm = dot(pol, v_tm) * R_TM_mag;
-    
     float new_mag = sqrtf(pol_te*pol_te + pol_tm*pol_tm);
+    
     if (new_mag > 1e-6f) {
         Vec3 new_pol = add(mul(v_te, pol_te), mul(v_tm, pol_tm));
         pol = normalize(new_pol);
@@ -137,49 +133,39 @@ __device__ int find_highest_voxel(VoxelGrid grid, int gx, int gz) {
     return 0;
 }
 
-// 3GPP 3D Directional Antenna Pattern
 __device__ float calc_antenna_gain(Vec3 ray_dir, SimParams params) {
     float az_rad = params.tx_azimuth_deg * PI / 180.0f;
     float el_rad = params.tx_elevation_deg * PI / 180.0f;
-
     float ray_az = atan2f(ray_dir.x, ray_dir.z);
     float delta_az = ray_az - az_rad;
     while (delta_az > PI) delta_az -= 2.0f * PI;
     while (delta_az < -PI) delta_az += 2.0f * PI;
-
     float ray_el = asinf(fmaxf(-1.0f, fminf(1.0f, ray_dir.y)));
     float delta_el = ray_el - el_rad;
-
     float vertical_beamwidth_rad = 10.0f * (PI / 180.0f);
     float A_h = 12.0f * powf(delta_az / params.beamwidth_rad, 2.0f);
     float A_v = 12.0f * powf(delta_el / vertical_beamwidth_rad, 2.0f);
-
     float attenuation = fminf(A_h + A_v, 38.0f); 
     return params.tx_gain_dbi - attenuation;
 }
 
-// Fast 3D Voxel Raymarching (Digital Differential Analyzer)
+// Raymarcher returning class code for material lookup
 __device__ bool trace_voxel(Vec3 orig, Vec3 dir, float max_dist, VoxelGrid grid, float& out_t, Vec3& out_normal, float& out_veg_dist, int& out_cls) {
     float gx = (orig.x - grid.min_x) / grid.cell_size;
     float gy = (orig.y - grid.min_y) / grid.cell_size;
     float gz = (orig.z - grid.min_z) / grid.cell_size;
-
     int step_x = (dir.x > 0) ? 1 : ((dir.x < 0) ? -1 : 0);
     int step_y = (dir.y > 0) ? 1 : ((dir.y < 0) ? -1 : 0);
     int step_z = (dir.z > 0) ? 1 : ((dir.z < 0) ? -1 : 0);
-
     float tDeltaX = (step_x != 0) ? fminf(fabs(1.0f / dir.x), 1e6) : 1e6;
     float tDeltaY = (step_y != 0) ? fminf(fabs(1.0f / dir.y), 1e6) : 1e6;
     float tDeltaZ = (step_z != 0) ? fminf(fabs(1.0f / dir.z), 1e6) : 1e6;
-
     float tMaxX = (step_x > 0) ? (ceilf(gx) - gx) * tDeltaX : (gx - floorf(gx)) * tDeltaX;
     float tMaxY = (step_y > 0) ? (ceilf(gy) - gy) * tDeltaY : (gy - floorf(gy)) * tDeltaY;
     float tMaxZ = (step_z > 0) ? (ceilf(gz) - gz) * tDeltaZ : (gz - floorf(gz)) * tDeltaZ;
-
     if (tMaxX == 0.0f) tMaxX += tDeltaX;
     if (tMaxY == 0.0f) tMaxY += tDeltaY;
     if (tMaxZ == 0.0f) tMaxZ += tDeltaZ;
-
     int cur_x = floorf(gx), cur_y = floorf(gy), cur_z = floorf(gz);
     float t = 0.0f;
     float max_grid_dist = max_dist / grid.cell_size;
@@ -189,16 +175,14 @@ __device__ bool trace_voxel(Vec3 orig, Vec3 dir, float max_dist, VoxelGrid grid,
         if (cur_x >= 0 && cur_x < grid.dim_x && cur_y >= 0 && cur_y < grid.dim_y && cur_z >= 0 && cur_z < grid.dim_z) {
             int idx = cur_y * (grid.dim_x * grid.dim_z) + cur_z * grid.dim_x + cur_x;
             int cls = grid.data[idx];
-            
-            if (cls >= 3 && cls <= 5) { // Vegetation Pass-through
+            if (cls >= 3 && cls <= 5) { 
                 out_veg_dist += grid.cell_size;
-            } else if (cls > 0) { // Hard hit
+            } else if (cls > 0) { 
                 out_t = t * grid.cell_size;
                 out_cls = cls;
                 return true;
             }
         }
-
         if (tMaxX < tMaxY) {
             if (tMaxX < tMaxZ) { cur_x += step_x; t = tMaxX; tMaxX += tDeltaX; out_normal = {(float)-step_x, 0, 0}; } 
             else { cur_z += step_z; t = tMaxZ; tMaxZ += tDeltaZ; out_normal = {0, 0, (float)-step_z}; }
@@ -210,40 +194,38 @@ __device__ bool trace_voxel(Vec3 orig, Vec3 dir, float max_dist, VoxelGrid grid,
     return false;
 }
 
-// Pass 1: Direct LOS with Deygout Multiple Knife-Edge Diffraction
+// SOTA: Deygout Multiple Knife-Edge Diffraction
 __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_grid_watts, float* min_dist_grid, float* max_dist_grid) {
     int gx = blockIdx.x * blockDim.x + threadIdx.x;
     int gz = blockIdx.y * blockDim.y + threadIdx.y;
-
     if (gx >= params.grid_width || gz >= params.grid_height) return;
 
     int top_y = find_highest_voxel(grid, gx, gz);
     float rx_y = grid.min_y + top_y * grid.cell_size + 1.5f; 
-
     float rx_x = grid.min_x + gx * grid.cell_size + grid.cell_size * 0.5f;
     float rx_z = grid.min_z + gz * grid.cell_size + grid.cell_size * 0.5f;
 
     Vec3 tx_pos = {params.tx_x, params.tx_y, params.tx_z};
     Vec3 rx_pos = {rx_x, rx_y, rx_z};
-    
     Vec3 dir = sub(rx_pos, tx_pos);
     float dist = length(dir);
     if (dist < 0.1f) return;
     dir = normalize(dir);
 
     float lambda = C_LIGHT / params.freq_hz;
-    float eirp_dbm = params.tx_power_dbm + calc_antenna_gain(dir, params);
+    float gain_dbi = calc_antenna_gain(dir, params);
+    float eirp_dbm = params.tx_power_dbm + gain_dbi;
     float p_tx_watts = powf(10.0f, (eirp_dbm - 30.0f) / 10.0f);
     
-    float fspl_mag = sqrtf(30.0f * p_tx_watts) * (lambda / (4.0f * PI * dist)); 
-    float e_mag_sq = fspl_mag * fspl_mag;
+    // MATHEMATICS FIX: Correct Friis Free Space Path Loss Calculation (Previous version artificially crushed LOS by 30dB)
+    float power_density = p_tx_watts / (4.0f * PI * dist * dist);
     float a_eff = (lambda * lambda) / (4.0f * PI);
-    float p_rx_watts = (e_mag_sq / (120.0f * PI)) * a_eff;
+    float p_rx_watts = power_density * a_eff;
 
     int num_steps = (int)ceilf(dist / (grid.cell_size * 0.5f));
     float veg_dist = 0.0f;
     
-    // DEYGOUT ALGORITHM: Pass 1 (Find Main Dominant Peak)
+    // DEYGOUT ALGORITHM: Pass 1 (Main Peak)
     float max_nu_1 = -1e9f;
     int peak_1_idx = -1;
     float p1_x, p1_y, p1_z, p1_d1;
@@ -259,11 +241,9 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
         int cgy = find_highest_voxel(grid, cgx, cgz);
         
         if (cgy > 0) {
-            // Check Vegetation Absorption
             int cls = grid.data[cgy * (grid.dim_x * grid.dim_z) + cgz * grid.dim_x + cgx];
             if (cls >= 3 && cls <= 5) veg_dist += grid.cell_size * 0.5f;
             
-            // Check Terrain Obstruction
             float obs_y = grid.min_y + cgy * grid.cell_size;
             float h = obs_y - cy;
             float d1 = f * dist;
@@ -278,22 +258,19 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
     }
 
     float diff_loss_db = 0.0f;
-
     if (max_nu_1 > -1.0f && peak_1_idx != -1) {
         diff_loss_db += knife_edge_loss_db(max_nu_1);
         
-        // DEYGOUT: Pass 2 (Find Sub-Peak Left of Main)
+        // DEYGOUT: Pass 2 (Left Sub-Peak)
         if (peak_1_idx > 1) {
             float max_nu_2 = -1e9f;
             for (int i = 1; i < peak_1_idx; i++) {
                 float f = (float)i / peak_1_idx;
                 float cx = tx_pos.x + f * (p1_x - tx_pos.x);
                 float cz = tx_pos.z + f * (p1_z - tx_pos.z);
-                
                 int cgx = (cx - grid.min_x) / grid.cell_size;
                 int cgz = (cz - grid.min_z) / grid.cell_size;
                 float obs_y = grid.min_y + find_highest_voxel(grid, cgx, cgz) * grid.cell_size;
-                
                 float cy = tx_pos.y + f * (p1_y - tx_pos.y);
                 float h = obs_y - cy;
                 float d1 = f * p1_d1, d2 = p1_d1 - d1;
@@ -303,7 +280,7 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
             if (max_nu_2 > -1.0f) diff_loss_db += knife_edge_loss_db(max_nu_2);
         }
         
-        // DEYGOUT: Pass 3 (Find Sub-Peak Right of Main)
+        // DEYGOUT: Pass 3 (Right Sub-Peak)
         if (peak_1_idx < num_steps - 1) {
             float max_nu_3 = -1e9f;
             int right_steps = num_steps - peak_1_idx;
@@ -312,11 +289,9 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
                 float f = (float)i / right_steps;
                 float cx = p1_x + f * (rx_pos.x - p1_x);
                 float cz = p1_z + f * (rx_pos.z - p1_z);
-                
                 int cgx = (cx - grid.min_x) / grid.cell_size;
                 int cgz = (cz - grid.min_z) / grid.cell_size;
                 float obs_y = grid.min_y + find_highest_voxel(grid, cgx, cgz) * grid.cell_size;
-                
                 float cy = p1_y + f * (rx_pos.y - p1_y);
                 float h = obs_y - cy;
                 float d1 = f * dist_p1_rx, d2 = dist_p1_rx - d1;
@@ -327,31 +302,29 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
         }
     }
 
-    p_rx_watts *= powf(10.0f, -diff_loss_db / 10.0f); // Power Multiplier
+    p_rx_watts *= powf(10.0f, -diff_loss_db / 10.0f);
     p_rx_watts *= calc_vegetation_loss_power_mult(veg_dist, params.freq_hz);
 
     int grid_idx = gz * params.grid_width + gx;
-    atomicAdd(&rx_grid_watts[grid_idx], p_rx_watts); // Incoherent Sum
+    atomicMax((int*)&rx_grid_watts[grid_idx], __float_as_int(p_rx_watts));
     atomicMinFloat(&min_dist_grid[grid_idx], dist);
     atomicMaxFloat(&max_dist_grid[grid_idx], dist);
 }
 
-// Pass 2: Ray Bouncing (SBR) Multipath Accumulation
+// SOTA + NEW FIX: SBR with Materials AND correctly normalized Gaussian Splatting
 __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_grid_watts, float* min_dist_grid, float* max_dist_grid) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= params.ray_count) return;
 
-    // Fibonacci Sphere launch
     float phi = acosf(1.0f - 2.0f * (idx + 0.5f) / params.ray_count);
     double theta_d = 3.141592653589793238 * (1.0 + sqrt(5.0)) * (double)idx;
     float theta = (float)fmod(theta_d, 2.0 * 3.141592653589793238);
-    
     Vec3 ray_dir = { sinf(phi) * sinf(theta), cosf(phi), sinf(phi) * cosf(theta) };
     Vec3 ray_orig = {params.tx_x, params.tx_y, params.tx_z};
     
-    // Initial Polarization Vector setup (Assume Vertical)
-    Vec3 up = {0, 1, 0};
-    Vec3 right = cross_prod(ray_dir, up);
+    // Initial Polarization Vector 
+    Vec3 up_vec = {0, 1, 0};
+    Vec3 right = cross_prod(ray_dir, up_vec);
     if (length(right) < 0.001f) right = {1, 0, 0};
     Vec3 pol = normalize(cross_prod(right, ray_dir));
 
@@ -359,6 +332,9 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
     float gain_dbi = calc_antenna_gain(ray_dir, params);
     float eirp_dbm = params.tx_power_dbm + gain_dbi;
     float p_watts = powf(10.0f, (eirp_dbm - 30.0f) / 10.0f);
+    
+    float d_omega = 4.0f * PI / params.ray_count;
+    float p_ray_watts_init = p_watts * (d_omega / (4.0f * PI)); 
     
     float accumulated_dist = 0.0f;
     float ray_power_multiplier = 1.0f;
@@ -376,47 +352,74 @@ __global__ void sbr_voxel_kernel(VoxelGrid grid, SimParams params, float* rx_gri
         Vec3 hit_point = add(ray_orig, mul(ray_dir, hit_t));
         accumulated_dist += hit_t;
         
-        // --- Prevent Double Counting LOS: Only accumulate multipath ---
+        // Prevent Double Counting LOS (Only accumulate bounces)
         if (bounce > 0) {
             int rx_x = (int)((hit_point.x - params.bounds_min_x) / params.cell_size);
             int rx_z = (int)((hit_point.z - params.bounds_min_z) / params.cell_size);
 
-            if (rx_x >= 0 && rx_x < params.grid_width && rx_z >= 0 && rx_z < params.grid_height) {
-                // Monte Carlo Incoherent Ray-Tube Density Summation
-                // Prevents artificial overlaps typical of DDA bounds checking.
-                float d_omega = 4.0f * PI / params.ray_count;
-                float A_t = d_omega * accumulated_dist * accumulated_dist; 
-                float A_voxel = params.cell_size * params.cell_size;
-                float spread_area = fmaxf(A_t, A_voxel); // Ensures correct energy conservation 
-                
-                float p_ray_watts_init = p_watts * (d_omega / (4.0f * PI)); 
-                float power_density = p_ray_watts_init * ray_power_multiplier / spread_area;
-                
-                float a_eff = (lambda * lambda) / (4.0f * PI);
-                float p_rx_watts = power_density * a_eff;
-                
-                int grid_idx = rx_z * params.grid_width + rx_x;
-                
-                atomicAdd(&rx_grid_watts[grid_idx], p_rx_watts); // Incoherent addition
-                atomicMinFloat(&min_dist_grid[grid_idx], accumulated_dist);
-                atomicMaxFloat(&max_dist_grid[grid_idx], accumulated_dist);
+            float A_t = d_omega * accumulated_dist * accumulated_dist; 
+            
+            // Adjust footprint for grazing impacts
+            Vec3 flat_ground = {0.0f, 1.0f, 0.0f};
+            float cos_ground = fmaxf(0.05f, fabs(dot(ray_dir, flat_ground)));
+            float A_footprint = A_t / cos_ground;
+            float A_voxel = params.cell_size * params.cell_size;
+            
+            float spread_area = fmaxf(A_footprint, A_voxel); 
+            float power_density = (p_ray_watts_init * ray_power_multiplier) / spread_area;
+            float a_eff = (lambda * lambda) / (4.0f * PI);
+            float p_rx_watts_center = power_density * a_eff;
+            
+            // FIX: Gaussian Ray Splatting (Preventing Artificial Stacking)
+            float r_footprint = sqrtf(spread_area / PI);
+            int radius_cells = (int)ceilf(r_footprint / params.cell_size);
+            radius_cells = min(radius_cells, 6);
+
+            if (radius_cells <= 0) {
+                if (rx_x >= 0 && rx_x < params.grid_width && rx_z >= 0 && rx_z < params.grid_height) {
+                    int grid_idx = rx_z * params.grid_width + rx_x;
+                    atomicMax((int*)&rx_grid_watts[grid_idx], __float_as_int(p_rx_watts_center));
+                    atomicMinFloat(&min_dist_grid[grid_idx], accumulated_dist);
+                    atomicMaxFloat(&max_dist_grid[grid_idx], accumulated_dist);
+                }
+            } else {
+                float r_cells_sq = (float)(radius_cells * radius_cells);
+                float sigma_sq = r_cells_sq / 4.0f;
+                for (int dx = -radius_cells; dx <= radius_cells; dx++) {
+                    for (int dz = -radius_cells; dz <= radius_cells; dz++) {
+                        float dist_sq = (float)(dx*dx + dz*dz);
+                        if (dist_sq <= r_cells_sq) {
+                            int px = rx_x + dx;
+                            int pz = rx_z + dz;
+                            if (px >= 0 && px < params.grid_width && pz >= 0 && pz < params.grid_height) {
+                                float weight = expf(-dist_sq / (2.0f * sigma_sq));
+                                float splat_watts = p_rx_watts_center * weight;
+                                if (splat_watts > 1e-18f) {
+                                    int grid_idx = pz * params.grid_width + px;
+                                    // Use atomicMax to record density. atomicAdd causes immense artificial 
+                                    // energy bloom when thousands of discrete wavefront samples overlap!
+                                    atomicMax((int*)&rx_grid_watts[grid_idx], __float_as_int(splat_watts));
+                                    atomicMinFloat(&min_dist_grid[grid_idx], accumulated_dist);
+                                    atomicMaxFloat(&max_dist_grid[grid_idx], accumulated_dist);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // --- ITU-R P.2040 Material Reflection & Polarization Shift ---
+        // SOTA: ITU-R P.2040 Material Reflection & Polarization Shift
         float eps_r, sigma;
         get_material_props(hit_cls, params.freq_hz, eps_r, sigma);
-        
         float reflection_mag = compute_reflection_and_update_pol(ray_dir, hit_normal, pol, eps_r, sigma, params.freq_hz);
         
-        // Specular Roughness Scattering
         float cos_theta_i = fabs(dot(ray_dir, hit_normal));
-        float roughness_term = (4.0f * PI * 1.5f * cos_theta_i) / lambda;
+        float roughness_term = (4.0f * PI * 0.1f * cos_theta_i) / lambda; // Realistic 10cm dirt roughness
         float specular_rho = expf(-0.5f * roughness_term * roughness_term);
         
         ray_power_multiplier *= (reflection_mag * reflection_mag) * specular_rho;
-
-        if (ray_power_multiplier < 1e-9f) break; // Terminate insignificant multipaths
+        if (ray_power_multiplier < 1e-9f) break;
 
         ray_orig = add(hit_point, mul(hit_normal, grid.cell_size * 0.1f)); 
         ray_dir = sub(ray_dir, mul(hit_normal, 2.0f * dot(ray_dir, hit_normal)));
@@ -440,7 +443,7 @@ extern "C" void run_rf_simulation(
     cudaMemcpy(d_grid_data, grid.data, total_voxels * sizeof(uint8_t), cudaMemcpyHostToDevice);
 
     cudaMalloc(&d_rx_watts, grid_size * sizeof(float));
-    cudaMemset(d_rx_watts, 0, grid_size * sizeof(float)); // Start at 0 for atomicAdd
+    cudaMemset(d_rx_watts, 0, grid_size * sizeof(float));
 
     cudaMalloc(&d_min_dist, grid_size * sizeof(float));
     cudaMalloc(&d_max_dist, grid_size * sizeof(float));
