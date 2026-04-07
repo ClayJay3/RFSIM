@@ -487,8 +487,9 @@
             }
         }
 
+        // --- FIX 1: Positive Easting correctly maps to Positive X now ---
         function utmToVector3(easting, altitude, northing, params, data) {
-            return new THREE.Vector3(-(easting - params.easting), altitude - data.min_alt, -(northing - params.northing));
+            return new THREE.Vector3(easting - params.easting, altitude - data.min_alt, -(northing - params.northing));
         }
 
         function renderResults(data, params, satTileData = null) {
@@ -501,7 +502,16 @@
             geom.rotateX(-Math.PI / 2);
 
             const pos = geom.attributes.position.array;
-            for (let i = 0; i < data.surface_heights.length; i++) pos[i * 3 + 1] = data.surface_heights[i] - data.min_alt; 
+            
+            // --- FIX 2: Correct heightmap orientation (Three.js N-to-S vs backend S-to-N) ---
+            for (let row = 0; row < data.grid_h; row++) {
+                for (let col = 0; col < data.grid_w; col++) {
+                    let v_idx = row * data.grid_w + col;
+                    let backend_z = data.grid_h - 1 - row; 
+                    let backend_idx = backend_z * data.grid_w + col;
+                    pos[v_idx * 3 + 1] = data.surface_heights[backend_idx] - data.min_alt;
+                }
+            }
             geom.computeVertexNormals();
 
             let satTexture;
@@ -638,8 +648,9 @@
             let centerIdx = Math.floor(data.grid_h/2) * data.grid_w + Math.floor(data.grid_w/2);
             txMarker.position.set(0, (data.surface_heights[centerIdx] - data.min_alt) + params.tx_height / 2, 0);
 
+            // --- FIX 3: Arrow rotation vector properly oriented (removed negative on X axis) ---
             const dir = new THREE.Vector3(
-                -Math.sin(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180),
+                Math.sin(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180),
                 Math.sin(params.tx_elevation*Math.PI/180),
                 -Math.cos(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180)
             ).normalize();
