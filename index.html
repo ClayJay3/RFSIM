@@ -30,6 +30,7 @@
         
         .engine-notes { font-size: 0.75rem; color: #888; margin-top: 15px; border-top: 1px solid #444; padding-top: 10px; line-height: 1.4; }
         .engine-notes span { color: #00ffcc; }
+        .preset-badge { display: inline-block; background: #333; color: #0fc; font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle;}
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
@@ -64,17 +65,52 @@
                 <label>Max Ray Bounces</label>
                 <input type="number" id="max_bounces" value="10" min="0" max="10" step="1">
             </div>
+            
             <hr style="border-color:#444; margin:15px 0;">
-            <div class="control-group"><label>Tx Frequency (MHz)</label><input type="number" id="freq" value="900"></div>
-            <div style="display: flex; gap: 10px;">
-                <div class="control-group"><label>Tx Height (m)</label><input type="number" id="tx_h" value="2"></div>
-                <div class="control-group"><label>Tx Power (dBm)</label><input type="number" id="tx_p" value="28"></div>
+            
+            <!-- HARDWARE PRESETS -->
+            <label style="color: #fff; font-weight: bold; margin-bottom: 8px;">Hardware Configuration</label>
+            <div class="control-group">
+                <label>Transmitter (Radio)</label>
+                <select id="radio-select" onchange="onRadioChange()">
+                    <!-- Populated via JS -->
+                </select>
             </div>
-            <div class="control-group"><label>Antenna Gain (dBi)</label><input type="number" id="tx_gain" value="18"></div>
-            <div class="control-group"><label>Azimuth (deg)</label><input type="number" id="tx_az" value="180"></div>
+            <div class="control-group">
+                <label>Compatible Antenna</label>
+                <select id="antenna-select" onchange="onAntennaChange()">
+                    <!-- Populated via JS -->
+                </select>
+            </div>
+
+            <!-- OVERRIDES -->
+            <div class="control-group" style="margin-top:15px;">
+                <label>Tx Frequency (MHz) <span class="preset-badge" id="preset-freq-badge">Auto</span></label>
+                <input type="number" id="freq" value="900">
+            </div>
             <div style="display: flex; gap: 10px;">
+                <div class="control-group">
+                    <label>Tx Power (dBm)</label>
+                    <input type="number" id="tx_p" value="28">
+                </div>
+                <div class="control-group">
+                    <label>Ant. Gain (dBi)</label>
+                    <input type="number" id="tx_gain" value="13">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <div class="control-group">
+                    <label>Beamwidth (deg)</label>
+                    <input type="number" id="beamwidth" value="120">
+                </div>
+                <div class="control-group">
+                    <label>Tx Height (m)</label>
+                    <input type="number" id="tx_h" value="15">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <div class="control-group"><label>Azimuth (deg)</label><input type="number" id="tx_az" value="180"></div>
                 <div class="control-group"><label>Downtilt (deg)</label><input type="number" id="tx_el" value="-5"></div>
-                <div class="control-group"><label>Beamwidth (deg)</label><input type="number" id="beamwidth" value="65"></div>
             </div>
 
             <hr style="border-color:#444; margin:15px 0;">
@@ -129,6 +165,102 @@
     <div id="canvas-container"></div>
 
     <script>
+        // --- HARDWARE CONFIGURATION DICTIONARY ---
+        const hardwareConfig = {
+            radios: {
+                "RocketM9": { name: "RocketM9", freq: 900, tx_p: 28 },
+                "RocketM2": { name: "RocketM2", freq: 2400, tx_p: 28 },
+                "RocketM3": { name: "RocketM3", freq: 3000, tx_p: 25 },
+                "RocketM365": { name: "RocketM365", freq: 3650, tx_p: 25 },
+                "RocketM5": { name: "RocketM5", freq: 5000, tx_p: 27 }
+            },
+            antennas: {
+                "RocketM9": [
+                    { name: "Sector AM-9M13", gain: 13, bw: 120 },
+                    { name: "Yagi AMY-9M16", gain: 16, bw: 45 }
+                ],
+                "RocketM2": [
+                    { name: "Sector AM-V2G-Ti (120° config)", gain: 15, bw: 120 },
+                    { name: "Sector AM-2G15-120", gain: 15, bw: 120 },
+                    { name: "Sector AM-2G16-90", gain: 16, bw: 90 },
+                    { name: "Dish RD-2G24", gain: 24, bw: 6 },
+                    { name: "Omni AMO-2G10", gain: 10, bw: 360 },
+                    { name: "Omni AMO-2G13", gain: 13, bw: 360 }
+                ],
+                "RocketM3": [
+                    { name: "Sector AM-3G18-120", gain: 18, bw: 120 },
+                    { name: "Dish RD-3G26", gain: 26, bw: 6 },
+                    { name: "Omni AMO-3G12", gain: 12, bw: 360 }
+                ],
+                "RocketM365": [
+                    { name: "Sector AM-3G18-120", gain: 18, bw: 120 },
+                    { name: "Dish RD-3G26", gain: 26, bw: 6 },
+                    { name: "Omni AMO-3G12", gain: 12, bw: 360 }
+                ],
+                "RocketM5": [
+                    { name: "Sector AM-V5G-Ti (120° config)", gain: 19, bw: 120 },
+                    { name: "Sector AM-M-V5G-Ti", gain: 15, bw: 120 },
+                    { name: "Sector AM-5G16-120", gain: 16, bw: 120 },
+                    { name: "Sector AM-5G17-90", gain: 17, bw: 90 },
+                    { name: "Sector AM-5G19-120", gain: 19, bw: 120 },
+                    { name: "Sector AM-5G20-90", gain: 20, bw: 90 },
+                    { name: "Sector AM-5AC21-60", gain: 21, bw: 60 },
+                    { name: "Sector AM-5AC22-45", gain: 22, bw: 45 },
+                    { name: "Dish RD-5G31-AC", gain: 31, bw: 5 },
+                    { name: "Dish RD-5G30-LW", gain: 30, bw: 5 },
+                    { name: "Dish RD-5G30", gain: 30, bw: 5 },
+                    { name: "Dish RD-5G34", gain: 34, bw: 3 },
+                    { name: "Omni AMO-5G10", gain: 10, bw: 360 },
+                    { name: "Omni AMO-5G13", gain: 13, bw: 360 }
+                ]
+            }
+        };
+
+        // --- HARDWARE UI LOGIC ---
+        function initHardwareDropdowns() {
+            const radioSelect = document.getElementById('radio-select');
+            for (const [key, data] of Object.entries(hardwareConfig.radios)) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.text = `${data.name} (${data.freq >= 1000 ? (data.freq/1000) + ' GHz' : data.freq + ' MHz'})`;
+                radioSelect.add(opt);
+            }
+            onRadioChange(); // Set initial values
+        }
+
+        function onRadioChange() {
+            const radioKey = document.getElementById('radio-select').value;
+            const radioData = hardwareConfig.radios[radioKey];
+            
+            // Update Base Radio parameters
+            document.getElementById('freq').value = radioData.freq;
+            document.getElementById('tx_p').value = radioData.tx_p;
+            document.getElementById('preset-freq-badge').innerText = radioData.name;
+
+            // Populate compatible antennas
+            const antSelect = document.getElementById('antenna-select');
+            antSelect.innerHTML = '';
+            
+            hardwareConfig.antennas[radioKey].forEach((ant, index) => {
+                const opt = document.createElement('option');
+                opt.value = index;
+                opt.text = `${ant.name} | ${ant.gain}dBi | ${ant.bw}°`;
+                antSelect.add(opt);
+            });
+            
+            onAntennaChange(); // Trigger antenna updates
+        }
+
+        function onAntennaChange() {
+            const radioKey = document.getElementById('radio-select').value;
+            const antIndex = document.getElementById('antenna-select').value;
+            const antData = hardwareConfig.antennas[radioKey][antIndex];
+            
+            document.getElementById('tx_gain').value = antData.gain;
+            document.getElementById('beamwidth').value = antData.bw;
+        }
+
+        // --- 3D ENGINE LOGIC ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a1a);
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 10000);
@@ -159,6 +291,8 @@
         const mouse = new THREE.Vector2();
 
         window.onload = async () => {
+            initHardwareDropdowns();
+
             const simBtn = document.getElementById('sim-btn');
             simBtn.innerText = "Locating Dataset Center...";
             simBtn.disabled = true;
@@ -284,7 +418,6 @@
                         let t = Math.max(0, Math.min(1, ds / 500.0)); 
                         if (t < 0.5) color = [0, Math.floor(t * 2 * 255), 255 - Math.floor(t * 2 * 100), 255]; 
                         else color = [Math.floor((t - 0.5) * 2 * 255), 255 - Math.floor((t - 0.5) * 2 * 255), 0, 255];
-                        // FIX applied: 0ns maps to blue
                         if (ds <= 0.1) color = [30, 30, 255, 255]; 
                     } else if (mode === 4) {
                         let snr = dbm - noiseFloor;
@@ -298,16 +431,12 @@
                         let ds = currentSimData.delay_spread_ns[i];
                         
                         if (dbm < rxSens || snr < 5) {
-                            // Primary Deadspot: Connection dropped due to low power or extreme noise
                             color = [255, 30, 30, 255]; 
                         } else if (ds > 250.0) {
-                            // Secondary Deadspot: Severe multipath interference causing data corruption
                             color = [255, 0, 255, 255]; 
                         } else if (snr < 12) {
-                            // Warning: Marginal signal on the edge of becoming a deadspot
                             color = [255, 165, 0, 150];
                         } else {
-                            // Clear: Solid connection. Rendered faintly to highlight the deadspots
                             color = [0, 255, 0, 40]; 
                         }
                     }
@@ -487,7 +616,6 @@
             }
         }
 
-        // --- FIX 1: Positive Easting correctly maps to Positive X now ---
         function utmToVector3(easting, altitude, northing, params, data) {
             return new THREE.Vector3(easting - params.easting, altitude - data.min_alt, -(northing - params.northing));
         }
@@ -503,7 +631,6 @@
 
             const pos = geom.attributes.position.array;
             
-            // --- FIX 2: Correct heightmap orientation (Three.js N-to-S vs backend S-to-N) ---
             for (let row = 0; row < data.grid_h; row++) {
                 for (let col = 0; col < data.grid_w; col++) {
                     let v_idx = row * data.grid_w + col;
@@ -648,7 +775,6 @@
             let centerIdx = Math.floor(data.grid_h/2) * data.grid_w + Math.floor(data.grid_w/2);
             txMarker.position.set(0, (data.surface_heights[centerIdx] - data.min_alt) + params.tx_height / 2, 0);
 
-            // --- FIX 3: Arrow rotation vector properly oriented (removed negative on X axis) ---
             const dir = new THREE.Vector3(
                 Math.sin(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180),
                 Math.sin(params.tx_elevation*Math.PI/180),
