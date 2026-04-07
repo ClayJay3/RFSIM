@@ -199,7 +199,6 @@ std::vector<RayPath> generate_visualization_rays(
                 int idx = gy * (grid.dim_x * grid.dim_z) + gz * grid.dim_x + gx;
                 int cls = voxel_data[idx];
                 
-                // BUGFIX: Bounce off ALL solid obstacles, but pass through vegetation (3,4,5)
                 if (cls > 0 && !(cls >= 3 && cls <= 5)) { 
                     hit = true;
                     float rx = (px - grid.min_x) / grid.cell_size - (gx + 0.5f);
@@ -380,6 +379,7 @@ int main() {
             float tx_el = body.has("tx_elevation") ? body["tx_elevation"].d() : -2.0;
             float tx_gain = body.has("tx_gain") ? body["tx_gain"].d() : 18.0;
             float beamwidth = body.has("beamwidth") ? body["beamwidth"].d() : 65.0;
+            int max_bounces = body.has("max_bounces") ? body["max_bounces"].i() : 3;
 
             std::vector<uint8_t> voxel_data;
             VoxelGrid grid_info;
@@ -407,7 +407,7 @@ int main() {
             params.grid_width = grid_info.dim_x;
             params.grid_height = grid_info.dim_z;
             params.cell_size = grid_info.cell_size;
-            params.max_bounces = 3; 
+            params.max_bounces = max_bounces; 
             params.ray_count = 500000; 
 
             // 1. Run actual heavy CUDA simulation (Now extracts Delay Spread too!)
