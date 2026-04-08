@@ -71,7 +71,7 @@
             <!-- HARDWARE PRESETS -->
             <label style="color: #fff; font-weight: bold; margin-bottom: 8px;">Hardware Configuration</label>
             <div class="control-group">
-                <label>Radio System</label>
+                <label>Radio System (TX & RX Hardware)</label>
                 <select id="radio-select" onchange="onRadioChange()">
                     <!-- Populated via JS -->
                 </select>
@@ -125,8 +125,8 @@
 
             <hr style="border-color:#444; margin:15px 0;">
             <div style="display: flex; gap: 10px;">
-                <div class="control-group"><label>Rx Sens. (dBm)</label><input type="number" id="rx_sens" value="-100"></div>
-                <div class="control-group"><label>Noise (dBm)</label><input type="number" id="noise_floor" value="-105"></div>
+                <div class="control-group"><label>Rx Sens. (dBm)</label><input type="number" id="rx_sens" value="-94"></div>
+                <div class="control-group"><label>Noise (dBm)</label><input type="number" id="noise_floor" value="-102"></div>
                 <div class="control-group"><label>Rx Gain (dBi)</label><input type="number" id="rx_gain" value="0"></div>
             </div>
             <hr style="border-color:#444; margin:15px 0;">
@@ -167,7 +167,7 @@
 
     <div id="legend">
         <div id="legend-title" style="margin-bottom: 5px; font-size: 0.9rem;">Usable Link / Capacity</div>
-        <div class="gradient-bar" id="legend-bar" style="background: linear-gradient(to right, red, orange, yellow, rgb(136, 255, 0), rgb(0, 255, 0));"></div>
+        <div class="gradient-bar" id="legend-bar" style="background: linear-gradient(to right, red, orange, yellow, #88ff00, #00ff00);"></div>
         <div class="legend-labels" id="legend-labels">
             <span>Dropped</span><span>Telem</span><span>Med</span><span>Video</span><span>Max</span>
         </div>
@@ -177,14 +177,13 @@
 
     <script>
         // --- HARDWARE CONFIGURATION DICTIONARY ---
-        // Includes approximate specs for the Vertical Beamwidth (vbw) property 
         const hardwareConfig = {
             radios: {
-                "RocketM9": { name: "RocketM9", freq: 900, tx_p: 28 },
-                "RocketM2": { name: "RocketM2", freq: 2400, tx_p: 28 },
-                "RocketM3": { name: "RocketM3", freq: 3000, tx_p: 25 },
-                "RocketM365": { name: "RocketM365", freq: 3650, tx_p: 25 },
-                "RocketM5": { name: "RocketM5", freq: 5000, tx_p: 27 }
+                "RocketM9": { name: "RocketM9", freq: 900, tx_p: 28, rx_sens: -94, noise: -102 },
+                "RocketM2": { name: "RocketM2", freq: 2400, tx_p: 28, rx_sens: -97, noise: -95 }, // 2.4G is usually noisier
+                "RocketM3": { name: "RocketM3", freq: 3000, tx_p: 25, rx_sens: -94, noise: -102 },
+                "RocketM365": { name: "RocketM365", freq: 3650, tx_p: 25, rx_sens: -94, noise: -102 },
+                "RocketM5": { name: "RocketM5", freq: 5000, tx_p: 27, rx_sens: -96, noise: -105 } // 5G has lower noise floor
             },
             antennas: {
                 "RocketM9": [
@@ -237,26 +236,24 @@
                 opt.text = `${data.name} (${data.freq >= 1000 ? (data.freq/1000) + ' GHz' : data.freq + ' MHz'})`;
                 radioSelect.add(opt);
             }
-            onRadioChange(); // Set initial values
+            onRadioChange(); 
         }
 
         function onRadioChange() {
             const radioKey = document.getElementById('radio-select').value;
             const radioData = hardwareConfig.radios[radioKey];
             
-            // Update Base Radio parameters
             document.getElementById('freq').value = radioData.freq;
             document.getElementById('tx_p').value = radioData.tx_p;
+            document.getElementById('rx_sens').value = radioData.rx_sens;
+            document.getElementById('noise_floor').value = radioData.noise;
             document.getElementById('preset-freq-badge').innerText = radioData.name;
 
-            // Populate compatible antennas
             const antSelect = document.getElementById('antenna-select');
             const rxAntSelect = document.getElementById('rx-antenna-select');
-            
             antSelect.innerHTML = '';
             rxAntSelect.innerHTML = '';
             
-            // Add a default isotropic option for Rx
             const isoOpt = document.createElement('option');
             isoOpt.value = -1;
             isoOpt.text = `Generic Isotropic | 0dBi | 360°`;
@@ -274,8 +271,8 @@
                 rxAntSelect.add(rxOpt);
             });
             
-            onAntennaChange(); // Trigger antenna updates
-            onRxAntennaChange(); // Trigger Rx antenna updates
+            onAntennaChange();
+            onRxAntennaChange();
         }
 
         function onAntennaChange() {
@@ -293,7 +290,7 @@
             const antIndex = parseInt(document.getElementById('rx-antenna-select').value);
             
             if (antIndex === -1) {
-                document.getElementById('rx_gain').value = 0; // Isotropic
+                document.getElementById('rx_gain').value = 0; 
             } else {
                 const antData = hardwareConfig.antennas[radioKey][antIndex];
                 document.getElementById('rx_gain').value = antData.gain;
@@ -421,8 +418,8 @@
                 labels.innerHTML = "<span>Dropped</span><span>Telem</span><span>Med</span><span>Video</span><span>Max</span>";
             } else if (mode === 5) {
                 title.innerText = "Deadspot Avoidance Warning";
-                bar.style.background = "linear-gradient(to right, red, magenta, rgba(0,255,0,0.5))";
-                labels.innerHTML = "<span>No Signal (Drop)</span><span>High Echo (Fading)</span><span>Clear / Usable</span>";
+                bar.style.background = "linear-gradient(to right, red, magenta, orange, rgba(0,255,0,0.8))";
+                labels.innerHTML = "<span>Deadspot</span><span>Echoes</span><span>Weak</span><span>Clear</span>";
             }
         }
 
@@ -447,40 +444,41 @@
             updateLegend(mode);
 
             for (let i = 0; i < currentSimData.heatmap_dbm.length; i++) {
-                let color = [0,0,0,0];
+                let color = [0,0,0,0]; 
                 let dbm = currentSimData.heatmap_dbm[i];
+                let snr = dbm - noiseFloor;
 
-                if (dbm > -119.0) {
-                    if (mode <= 2) {
-                        color = dbmToColor(dbm);
-                    } else if (mode === 3) {
+                if (mode <= 2) {
+                    if (dbm > -119.0) color = dbmToColor(dbm);
+                } else if (mode === 3) {
+                    if (dbm >= rxSens && snr >= 5) { 
                         let ds = currentSimData.delay_spread_ns[i];
                         let t = Math.max(0, Math.min(1, ds / 500.0)); 
                         if (t < 0.5) color = [0, Math.floor(t * 2 * 255), 255 - Math.floor(t * 2 * 100), 255]; 
                         else color = [Math.floor((t - 0.5) * 2 * 255), 255 - Math.floor((t - 0.5) * 2 * 255), 0, 255];
                         if (ds <= 0.1) color = [30, 30, 255, 255]; 
-                    } else if (mode === 4) {
-                        let snr = dbm - noiseFloor;
-                        if (dbm < rxSens || snr < 5) color = [255, 30, 30, 255]; 
-                        else if (snr < 12) color = [255, 165, 0, 255]; 
-                        else if (snr < 20) color = [255, 255, 0, 255]; 
-                        else if (snr < 28) color = [136, 255, 0, 255]; 
-                        else color = [0, 255, 0, 255];   
-                    } else if (mode === 5) {
-                        let snr = dbm - noiseFloor;
-                        let ds = currentSimData.delay_spread_ns[i];
-                        
-                        if (dbm < rxSens || snr < 5) {
-                            color = [255, 30, 30, 255]; 
-                        } else if (ds > 250.0) {
-                            color = [255, 0, 255, 255]; 
-                        } else if (snr < 12) {
-                            color = [255, 165, 0, 150];
-                        } else {
-                            color = [0, 255, 0, 40]; 
-                        }
+                    } else if (dbm > -119.0) {
+                        color = [50, 50, 50, 150]; 
+                    }
+                } else if (mode === 4) {
+                    if (dbm < rxSens || snr < 5 || dbm <= -119.0) color = [255, 30, 30, 180]; 
+                    else if (snr < 12) color = [255, 165, 0, 255];  
+                    else if (snr < 20) color = [255, 255, 0, 255];  
+                    else if (snr < 28) color = [136, 255, 0, 255];  
+                    else color = [0, 255, 0, 255];                  
+                } else if (mode === 5) {
+                    let ds = currentSimData.delay_spread_ns[i];
+                    if (dbm < rxSens || snr < 5 || dbm <= -119.0) {
+                        color = [255, 30, 30, 200]; 
+                    } else if (ds > 250.0) {
+                        color = [255, 0, 255, 255]; 
+                    } else if (snr < 12) {
+                        color = [255, 165, 0, 200]; 
+                    } else {
+                        color = [0, 255, 0, 80];    
                     }
                 }
+
                 texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; 
                 texData[i * 4 + 2] = color[2]; texData[i * 4 + 3] = color[3];
             }
@@ -501,14 +499,11 @@
             if (photonMesh && activeRays.length > 0) {
                 const t = (Date.now() / 1000); 
                 const speed = 250; 
-                
                 for (let i = 0; i < activeRays.length; i++) {
                     const ray = activeRays[i];
                     let progress = ((t * speed) + ray.staggerOffset) % ray.totalDist; 
-                    
                     let currentPos = ray.segments[ray.segments.length - 1].end; 
                     let currentDir = new THREE.Vector3(0, 1, 0); 
-                    
                     for (let s of ray.segments) {
                         if (progress >= s.accum && progress <= s.accum + s.dist) {
                             let localP = (progress - s.accum) / s.dist;
@@ -517,13 +512,11 @@
                             break;
                         }
                     }
-                    
                     dummyMatrix.position.copy(currentPos);
                     let target = new THREE.Vector3().copy(currentPos).add(currentDir);
                     dummyMatrix.lookAt(target);
                     dummyMatrix.rotateX(Math.PI / 2); 
                     dummyMatrix.updateMatrix();
-                    
                     photonMesh.setMatrixAt(ray.id, dummyMatrix.matrix);
                 }
                 photonMesh.instanceMatrix.needsUpdate = true;
@@ -533,7 +526,6 @@
                 const mode = heatmapMesh.material.userData.heatmapMode.value;
                 if (mode > 0 && mode < 3) heatmapMesh.material.userData.time.value = (Date.now() % 10000) / 1000.0;
             }
-
             renderer.render(scene, camera); 
         }
         animate();
@@ -561,29 +553,20 @@
                 const lat = 180 / Math.PI * Math.atan(0.5 * (Math.exp(n2) - Math.exp(-n2)));
                 return [lng, lat];
             }
-
             const tl_lnglat = proj4(projStr, 'WGS84', [payload.easting - payload.radius, payload.northing + payload.radius]);
             const br_lnglat = proj4(projStr, 'WGS84', [payload.easting + payload.radius, payload.northing - payload.radius]);
-
             let z = 21;
             let tlTile, brTile;
             while(z > 0) {
                 tlTile = lngLatToTile(tl_lnglat[0], tl_lnglat[1], z);
                 brTile = lngLatToTile(br_lnglat[0], br_lnglat[1], z);
-                const widthTiles = brTile.x - tlTile.x + 1;
-                const heightTiles = brTile.y - tlTile.y + 1;
-                if (widthTiles * heightTiles <= 25) break; 
+                if ((brTile.x - tlTile.x + 1) * (brTile.y - tlTile.y + 1) <= 25) break; 
                 z--;
             }
-
-            const widthTiles = brTile.x - tlTile.x + 1;
-            const heightTiles = brTile.y - tlTile.y + 1;
-
+            const widthTiles = brTile.x - tlTile.x + 1, heightTiles = brTile.y - tlTile.y + 1;
             const canvas = document.createElement('canvas');
-            canvas.width = widthTiles * 256;
-            canvas.height = heightTiles * 256;
+            canvas.width = widthTiles * 256; canvas.height = heightTiles * 256;
             const ctx = canvas.getContext('2d');
-
             const fetchPromises = [];
             for (let x = tlTile.x; x <= brTile.x; x++) {
                 for (let y = tlTile.y; y <= brTile.y; y++) {
@@ -597,12 +580,10 @@
                 }
             }
             await Promise.all(fetchPromises);
-
             const canvas_tl_lnglat = tileToLngLat(tlTile.x, tlTile.y, z);
             const canvas_br_lnglat = tileToLngLat(brTile.x + 1, brTile.y + 1, z);
             const canvas_tl_utm = proj4('WGS84', projStr, canvas_tl_lnglat);
             const canvas_br_utm = proj4('WGS84', projStr, canvas_br_lnglat);
-
             return {
                 canvas: canvas,
                 canvas_bl_utm: [canvas_tl_utm[0], canvas_br_utm[1]], 
@@ -639,18 +620,14 @@
                 const data = await response.json();
                 currentSimData = data;
                 document.getElementById('info-box').style.display = 'block';
-                
                 const projStr = `+proj=utm +zone=${data.zone} ${data.hem === 'N' ? '+north' : '+south'} +datum=WGS84 +units=m +no_defs`;
-                
                 let satTileData = null;
                 try { satTileData = await fetchStitchedSatellite({ easting: data.easting, northing: data.northing, radius: payload.radius }, projStr); } 
                 catch(e) { console.error("Failed to fetch satellite tiles", e); }
-                
                 renderResults(data, {
                     easting: data.easting, northing: data.northing, radius: payload.radius,
                     tx_height: payload.tx_height, tx_azimuth: payload.tx_azimuth, tx_elevation: payload.tx_elevation
                 }, satTileData);
-
             } catch (error) {
                 alert("Simulation failed. Make sure the server is running.");
             } finally {
@@ -670,9 +647,7 @@
 
             const geom = new THREE.PlaneGeometry(params.radius * 2, params.radius * 2, data.grid_w - 1, data.grid_h - 1);
             geom.rotateX(-Math.PI / 2);
-
             const pos = geom.attributes.position.array;
-            
             for (let row = 0; row < data.grid_h; row++) {
                 for (let col = 0; col < data.grid_w; col++) {
                     let v_idx = row * data.grid_w + col;
@@ -690,9 +665,7 @@
                 const mesh_bl_utm = [params.easting - params.radius, params.northing - params.radius];
                 const offsetX = (mesh_bl_utm[0] - satTileData.canvas_bl_utm[0]) / satTileData.canvasWidthUTM;
                 const offsetY = (mesh_bl_utm[1] - satTileData.canvas_bl_utm[1]) / satTileData.canvasHeightUTM;
-                const repeatX = (params.radius * 2) / satTileData.canvasWidthUTM;
-                const repeatY = (params.radius * 2) / satTileData.canvasHeightUTM;
-                satTexture.repeat.set(repeatX, repeatY);
+                satTexture.repeat.set((params.radius * 2) / satTileData.canvasWidthUTM, (params.radius * 2) / satTileData.canvasHeightUTM);
                 satTexture.offset.set(offsetX, offsetY);
             } else {
                 const canvas = document.createElement('canvas');
@@ -706,17 +679,15 @@
                 satTexture.wrapS = satTexture.wrapT = THREE.RepeatWrapping; satTexture.repeat.set(4, 4);
             }
 
-            const satMat = new THREE.MeshPhongMaterial({ map: satTexture, color: 0xffffff, side: THREE.DoubleSide });
-            terrainMesh = new THREE.Mesh(geom, satMat);
+            terrainMesh = new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ map: satTexture, color: 0xffffff, side: THREE.DoubleSide }));
             scene.add(terrainMesh);
 
             let sources = [], srcDists = [];
             if (data.ray_paths && data.ray_paths.length > 0) {
                 let txVec = utmToVector3(data.ray_paths[0][0][0], data.ray_paths[0][0][1], data.ray_paths[0][0][2], params, data);
                 sources.push(txVec); srcDists.push(0.0);
-
                 for (let i = 0; i < data.ray_paths.length; i++) {
-                    if (sources.length >= 500) break;
+                    if (sources.length >= 16) break;
                     let path = data.ray_paths[i];
                     if (path.length > 1) {
                         let bounceVec = utmToVector3(path[1][0], path[1][1], path[1][2], params, data);
@@ -734,26 +705,20 @@
                 opacity: parseFloat(document.getElementById('heatmap-opacity').value), depthWrite: false, 
                 polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1
             });
-            
             heatmapMat.userData = {
                 time: { value: 0.0 }, heatmapMode: { value: parseInt(document.getElementById('heatmap-mode').value) },
                 sources: { value: sources }, srcDists: { value: srcDists }, numSources: { value: activeSourcesCount }
             };
-
             heatmapMat.onBeforeCompile = (shader) => {
                 shader.uniforms.time = heatmapMat.userData.time;
                 shader.uniforms.heatmapMode = heatmapMat.userData.heatmapMode;
                 shader.uniforms.sources = heatmapMat.userData.sources;
                 shader.uniforms.srcDists = heatmapMat.userData.srcDists;
                 shader.uniforms.numSources = heatmapMat.userData.numSources;
-                
                 shader.vertexShader = `varying vec3 vLocalPos;\n` + shader.vertexShader;
                 shader.vertexShader = shader.vertexShader.replace(`#include <begin_vertex>`, `#include <begin_vertex>\nvLocalPos = position;`);
                 shader.fragmentShader = `uniform float time;\nuniform float heatmapMode;\nuniform vec3 sources[16];\nuniform float srcDists[16];\nuniform int numSources;\nvarying vec3 vLocalPos;\n` + shader.fragmentShader;
-
-                shader.fragmentShader = shader.fragmentShader.replace(
-                    `#include <map_fragment>`,
-                    `
+                shader.fragmentShader = shader.fragmentShader.replace(`#include <map_fragment>`, `
                     #include <map_fragment>
                     if (heatmapMode > 0.5 && heatmapMode < 1.5) {
                         float dist = distance(vLocalPos, sources[0]); 
@@ -761,69 +726,48 @@
                         float mask = smoothstep(currentRadius, currentRadius - 5.0, dist);
                         float edge = smoothstep(currentRadius - 4.0, currentRadius, dist) * smoothstep(currentRadius + 2.0, currentRadius, dist);
                         diffuseColor.a *= mask; diffuseColor.rgb += vec3(edge * 1.5);
-                    } 
-                    else if (heatmapMode > 1.5 && heatmapMode < 2.5) {
-                        float waveSum = 0.0;
-                        float currentRadius = time * 75.0; 
-                        float k = 6.28318 / 8.0; 
+                    } else if (heatmapMode > 1.5 && heatmapMode < 2.5) {
+                        float waveSum = 0.0, currentRadius = time * 75.0, k = 6.28318 / 8.0; 
                         if (distance(vLocalPos, sources[0]) < currentRadius) {
                             for(int i = 0; i < 16; i++) {
                                 if (i >= numSources) break;
                                 float d = distance(vLocalPos, sources[i]);
-                                if (srcDists[i] + d < currentRadius) {
-                                    waveSum += ((i == 0) ? 1.0 : 0.6) / (d * 0.1 + 1.0) * sin(k * (srcDists[i] + d) - k * currentRadius);
-                                }
+                                if (srcDists[i] + d < currentRadius) waveSum += ((i == 0) ? 1.0 : 0.6) / (d * 0.1 + 1.0) * sin(k * (srcDists[i] + d) - k * currentRadius);
                             }
                             diffuseColor.rgb *= clamp((waveSum * 1.5) + 0.5, 0.0, 2.0);
                         } else diffuseColor.a = 0.0; 
                     }
-                    `
-                );
+                `);
             };
 
             heatmapMesh = new THREE.Mesh(geom, heatmapMat);
             terrainMesh.add(heatmapMesh);
             updateHeatmapTexture();
 
-            activeRays = [];
             if (data.ray_paths) {
-                const showRays = document.getElementById('viz-rays').checked;
-                const linePos = [];
-                const photonGeo = new THREE.CylinderGeometry(0.2, 0.2, 4.0, 8);
-                const photonMat = new THREE.MeshBasicMaterial({color: 0x00ffff});
-                photonMesh = new THREE.InstancedMesh(photonGeo, photonMat, data.ray_paths.length);
-                
+                const showRays = document.getElementById('viz-rays').checked, linePos = [];
+                photonMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.2, 0.2, 4.0, 8), new THREE.MeshBasicMaterial({color: 0x00ffff}), data.ray_paths.length);
+                activeRays = [];
                 data.ray_paths.forEach((path, i) => {
                     const pts = path.map(p => utmToVector3(p[0], p[1], p[2], params, data));
                     for(let j=0; j<pts.length-1; j++) linePos.push(pts[j].x, pts[j].y, pts[j].z, pts[j+1].x, pts[j+1].y, pts[j+1].z);
-                    
                     let totalDist = 0, segments = [];
                     for(let j=0; j<pts.length-1; j++) {
                         let d = pts[j].distanceTo(pts[j+1]);
                         segments.push({start: pts[j], end: pts[j+1], dist: d, accum: totalDist});
                         totalDist += d;
                     }
-                    activeRays.push({segments: segments, totalDist: totalDist, id: i, staggerOffset: Math.random() * 500});
+                    activeRays.push({segments, totalDist, id: i, staggerOffset: Math.random() * 500});
                 });
-                
-                const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending });
-                rayLinesMesh = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3)), lineMat);
-                
+                rayLinesMesh = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(linePos, 3)), new THREE.LineBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending }));
                 photonMesh.visible = rayLinesMesh.visible = showRays;
                 scene.add(rayLinesMesh); scene.add(photonMesh);
             }
 
             txMarker = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, params.tx_height), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-            let centerIdx = Math.floor(data.grid_h/2) * data.grid_w + Math.floor(data.grid_w/2);
-            txMarker.position.set(0, (data.surface_heights[centerIdx] - data.min_alt) + params.tx_height / 2, 0);
-
-            const dir = new THREE.Vector3(
-                Math.sin(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180),
-                Math.sin(params.tx_elevation*Math.PI/180),
-                -Math.cos(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180)
-            ).normalize();
-            
-            txMarker.add(new THREE.ArrowHelper(dir, new THREE.Vector3(0, params.tx_height/2, 0), 50, 0xffff00, 10, 5));
+            txMarker.position.set(0, (data.surface_heights[Math.floor(data.grid_h/2) * data.grid_w + Math.floor(data.grid_w/2)] - data.min_alt) + params.tx_height / 2, 0);
+            const dirVec = new THREE.Vector3(Math.sin(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180), Math.sin(params.tx_elevation*Math.PI/180), -Math.cos(params.tx_azimuth*Math.PI/180)*Math.cos(params.tx_elevation*Math.PI/180)).normalize();
+            txMarker.add(new THREE.ArrowHelper(dirVec, new THREE.Vector3(0, params.tx_height/2, 0), 50, 0xffff00, 10, 5));
             scene.add(txMarker);
         }
     </script>
