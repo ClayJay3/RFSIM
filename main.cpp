@@ -39,6 +39,96 @@ sqlite3* get_db_connection() {
     return db;
 }
 
+// FIX 1: Lightweight Block Meshing Algorithm
+// Converts the Voxel Grid into a continuous 3D Triangle Mesh for Hardware Raytracing
+void generate_optix_mesh(const VoxelGrid& grid, TriangleMesh& mesh) {
+    float s = grid.cell_size;
+    for (int y = 0; y < grid.dim_y; y++) {
+        for (int z = 0; z < grid.dim_z; z++) {
+            for (int x = 0; x < grid.dim_x; x++) {
+                int idx = y * (grid.dim_x * grid.dim_z) + z * grid.dim_x + x;
+                if (grid.data[idx] > 0) {
+                    float px = grid.min_x + x * s;
+                    float py = grid.min_y + y * s;
+                    float pz = grid.min_z + z * s;
+                    
+                    // Top Face
+                    if (y == grid.dim_y - 1 || grid.data[idx + grid.dim_x*grid.dim_z] == 0) {
+                        int v_idx = mesh.vertices.size() / 3;
+                        mesh.vertices.insert(mesh.vertices.end(), {
+                            px, py+s, pz,  px+s, py+s, pz,  px+s, py+s, pz+s,  px, py+s, pz+s
+                        });
+                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+2, v_idx+1, v_idx, v_idx+3, v_idx+2});
+                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
+                    }
+                    // Right Face
+                    if (x == grid.dim_x - 1 || grid.data[idx + 1] == 0) {
+                        int v_idx = mesh.vertices.size() / 3;
+                        mesh.vertices.insert(mesh.vertices.end(), {
+                            px+s, py, pz,  px+s, py+s, pz,  px+s, py+s, pz+s,  px+s, py, pz+s
+                        });
+                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
+                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
+                    }
+                    // Front Face
+                    if (z == grid.dim_z - 1 || grid.data[idx + grid.dim_x] == 0) {
+                        int v_idx = mesh.vertices.size() / 3;
+                        mesh.vertices.insert(mesh.vertices.end(), {
+                            px, py, pz+s,  px+s, py, pz+s,  px+s, py+s, pz+s,  px, py+s, pz+s
+                        });
+                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
+                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
+                    }
+                    // Left Face
+                    if (x == 0 || grid.data[idx - 1] == 0) {
+                        int v_idx = mesh.vertices.size() / 3;
+                        mesh.vertices.insert(mesh.vertices.end(), {
+                            px, py, pz,  px, py, pz+s,  px, py+s, pz+s,  px, py+s, pz
+                        });
+                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
+                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
+                    }
+                    // Back Face
+                    if (z == 0 || grid.data[idx - grid.dim_x] == 0) {
+                        int v_idx = mesh.vertices.size() / 3;
+                        mesh.vertices.insert(mesh.vertices.end(), {
+                            px, py, pz,  px, py+s, pz,  px+s, py+s, pz,  px+s, py, pz
+                        });
+                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
+                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
+                    }
+                }
+            }
+        }
+    }
+}
+
+// FIX 2: Synthetic 3D Antenna Pattern Generator
+// Maps Directivity, side-lobes, and back-lobes into a 2D Texture Array
+std::vector<float> generate_antenna_texture(float gain_dbi, float horiz_beam, float vert_beam) {
+    std::vector<float> tex(360 * 180, -30.0f); // Default deep null
+    for (int el = 0; el < 180; el++) {
+        for (int az = 0; az < 360; az++) {
+            float az_off = std::fmod(az + 180.0f, 360.0f) - 180.0f; // -180 to 180
+            float el_off = el - 90.0f; // -90 to 90
+            
+            // Main Lobe
+            float h_loss = 12.0f * std::pow(az_off / horiz_beam, 2.0f);
+            float v_loss = 12.0f * std::pow(el_off / vert_beam, 2.0f);
+            float main_lobe = gain_dbi - std::min(h_loss + v_loss, 38.0f);
+            
+            // Sidelobes (Bessel-like ripple)
+            float side_lobe = gain_dbi - 18.0f - 5.0f * std::sin(std::abs(az_off) * M_PI / 20.0f);
+            
+            // Backlobe
+            float back_lobe = (std::abs(az_off) > 120.0f) ? (gain_dbi - 25.0f) : -100.0f;
+            
+            tex[el * 360 + az] = std::max({main_lobe, side_lobe, back_lobe});
+        }
+    }
+    return tex;
+}
+
 bool build_voxel_grid(
     float center_e, float center_n, float radius, float cell_size,
     std::vector<uint8_t>& voxel_data, VoxelGrid& grid_info, std::vector<float>& surface_heightmap) 
@@ -114,6 +204,7 @@ bool build_voxel_grid(
     return true;
 }
 
+// Note: Kept strictly unchanged as requested. Visualization ray paths still use voxels.
 std::vector<RayPath> generate_visualization_rays(
     const SimParams& params, 
     const VoxelGrid& grid, 
@@ -337,7 +428,7 @@ int main() {
             float tx_az = body.has("tx_azimuth") ? body["tx_azimuth"].d() : 180.0;
             float tx_el = body.has("tx_elevation") ? body["tx_elevation"].d() : -2.0;
             float tx_gain = body.has("tx_gain") ? body["tx_gain"].d() : 18.0;
-            float rx_gain = body.has("rx_gain") ? body["rx_gain"].d() : 0.0; // New Dynamic Variable
+            float rx_gain = body.has("rx_gain") ? body["rx_gain"].d() : 0.0; 
             float beamwidth = body.has("beamwidth") ? body["beamwidth"].d() : 65.0;
             float v_beamwidth = body.has("v_beamwidth") ? body["v_beamwidth"].d() : 10.0; 
 
@@ -348,6 +439,10 @@ int main() {
             if (!build_voxel_grid(easting, northing, radius, voxel_res, voxel_data, grid_info, surface_mesh)) {
                 return crow::response(400, "No LiDAR points found in this area.");
             }
+            
+            // FIX 1 Execution: Generate OptiX Triangle Mesh from Voxels
+            TriangleMesh optix_mesh;
+            generate_optix_mesh(grid_info, optix_mesh);
 
             float center_ground = surface_mesh[(grid_info.dim_z/2) * grid_info.dim_x + (grid_info.dim_x/2)];
 
@@ -360,7 +455,7 @@ int main() {
             params.tx_azimuth_deg = tx_az;
             params.tx_elevation_deg = tx_el;
             params.tx_gain_dbi = tx_gain;
-            params.rx_gain_dbi = rx_gain; // Passed to Engine
+            params.rx_gain_dbi = rx_gain; 
             params.beamwidth_rad = beamwidth * (M_PI / 180.0);
             params.vertical_beamwidth_rad = v_beamwidth * (M_PI / 180.0); 
             
@@ -371,10 +466,15 @@ int main() {
             params.cell_size = grid_info.cell_size;
             params.max_bounces = max_bounces; 
             params.ray_count = 500000; 
+            
+            // FIX 2 Execution: Generate 3D Hardware Antenna Texture Pattern
+            std::vector<float> antenna_pattern = generate_antenna_texture(tx_gain, beamwidth, v_beamwidth);
 
             std::vector<float> rx_power_dbm;
             std::vector<float> delay_spread_ns;
-            run_rf_simulation(grid_info, params, rx_power_dbm, delay_spread_ns);
+            
+            // Pass Mesh and Antenna Pattern into Engine
+            run_rf_simulation(grid_info, optix_mesh, antenna_pattern, params, rx_power_dbm, delay_spread_ns);
 
             std::vector<RayPath> ray_paths = generate_visualization_rays(params, grid_info, voxel_data, 1000);
 

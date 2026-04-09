@@ -32,21 +32,37 @@ if(NOT crow_fetch_POPULATED)
   add_library(Crow::Crow ALIAS Crow)
 endif()
 
+# --- OptiX PTX Compilation ---
+# We must compile the OptiX kernels to a PTX string/file for runtime module creation
+set(OPTIX_PTX_FILE "${CMAKE_CURRENT_BINARY_DIR}/optix_kernels.ptx")
+add_custom_command(
+    OUTPUT ${OPTIX_PTX_FILE}
+    COMMAND ${CMAKE_CUDA_COMPILER} -ptx -O3 -use_fast_math -arch=compute_75 
+            ${CMAKE_CURRENT_SOURCE_DIR}/optix_kernels.cu 
+            -o ${OPTIX_PTX_FILE} 
+            -I/usr/local/include/optix
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/optix_kernels.cu
+)
+add_custom_target(optix_ptx_target DEPENDS ${OPTIX_PTX_FILE})
+
 add_executable(rf_sim_server 
     main.cpp 
     rf_engine.cu
 )
+
+add_dependencies(rf_sim_server optix_ptx_target)
 
 target_include_directories(rf_sim_server PRIVATE 
     ${GDAL_INCLUDE_DIRS}
     ${CURL_INCLUDE_DIRS}
     ${SQLite3_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}
+    /usr/local/include/optix
 )
 
-# Link SQLite3 alongside other libraries
 target_link_libraries(rf_sim_server PRIVATE 
     CUDA::cudart
+    CUDA::cuda_driver
     ${GDAL_LIBRARIES}
     ${CURL_LIBRARIES}
     SQLite::SQLite3
@@ -55,5 +71,6 @@ target_link_libraries(rf_sim_server PRIVATE
 )
 
 set_target_properties(rf_sim_server PROPERTIES CUDA_ARCHITECTURES "75;80;86;89")
+target_compile_definitions(rf_sim_server PRIVATE PTX_FILE_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
 file(COPY index.html DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
