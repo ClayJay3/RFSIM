@@ -645,17 +645,31 @@
             if (rayLinesMesh) scene.remove(rayLinesMesh);
             if (photonMesh) scene.remove(photonMesh);
 
-            const geom = new THREE.PlaneGeometry(params.radius * 2, params.radius * 2, data.grid_w - 1, data.grid_h - 1);
-            geom.rotateX(-Math.PI / 2);
-            const pos = geom.attributes.position.array;
-            for (let row = 0; row < data.grid_h; row++) {
-                for (let col = 0; col < data.grid_w; col++) {
-                    let v_idx = row * data.grid_w + col;
-                    let backend_z = data.grid_h - 1 - row; 
-                    let backend_idx = backend_z * data.grid_w + col;
-                    pos[v_idx * 3 + 1] = data.surface_heights[backend_idx] - data.min_alt;
-                }
+            // Replaces the 2.5D PlaneGeometry extrapolation with the actual true 3D Voxel Mesh built for OptiX
+            const geom = new THREE.BufferGeometry();
+            const vertices = new Float32Array(data.mesh_vertices.length);
+            const uvs = new Float32Array((data.mesh_vertices.length / 3) * 2);
+            
+            for (let i = 0; i < data.mesh_vertices.length; i += 3) {
+                const e = data.mesh_vertices[i];
+                const a = data.mesh_vertices[i+1];
+                const n = data.mesh_vertices[i+2];
+                
+                vertices[i] = e - params.easting;
+                vertices[i+1] = a - data.min_alt;
+                vertices[i+2] = -(n - params.northing);
+
+                // Compute UVs for mapping the satellite texture to the arbitrary voxel mesh
+                const u = (e - (params.easting - params.radius)) / (params.radius * 2);
+                const v = (n - (params.northing - params.radius)) / (params.radius * 2);
+                
+                uvs[(i/3)*2] = u;
+                uvs[(i/3)*2+1] = v;
             }
+            
+            geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+            geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+            geom.setIndex(data.mesh_indices);
             geom.computeVertexNormals();
 
             let satTexture;

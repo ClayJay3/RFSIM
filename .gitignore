@@ -10,6 +10,9 @@
 # Build files
 build/
 
+# Ignore shell scripts
+*.sh
+
 # Database files
 *.db
 *.db-shm

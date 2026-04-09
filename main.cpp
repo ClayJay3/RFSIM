@@ -39,66 +39,43 @@ sqlite3* get_db_connection() {
     return db;
 }
 
-// FIX 1: Lightweight Block Meshing Algorithm
-// Converts the Voxel Grid into a continuous 3D Triangle Mesh for Hardware Raytracing
-void generate_optix_mesh(const VoxelGrid& grid, TriangleMesh& mesh) {
+// FIX 1: Smooth Continuous Meshing Algorithm
+// Builds a perfectly smooth 2.5D triangle mesh using the raw, unquantized LiDAR altitudes.
+// This completely abandons the blocky voxel representation for physical ray-bouncing geometry.
+void generate_optix_mesh(const VoxelGrid& grid, const std::vector<float>& surface_heightmap, const std::vector<int>& surface_materials, TriangleMesh& mesh) {
     float s = grid.cell_size;
-    for (int y = 0; y < grid.dim_y; y++) {
-        for (int z = 0; z < grid.dim_z; z++) {
-            for (int x = 0; x < grid.dim_x; x++) {
-                int idx = y * (grid.dim_x * grid.dim_z) + z * grid.dim_x + x;
-                if (grid.data[idx] > 0) {
-                    float px = grid.min_x + x * s;
-                    float py = grid.min_y + y * s;
-                    float pz = grid.min_z + z * s;
-                    
-                    // Top Face
-                    if (y == grid.dim_y - 1 || grid.data[idx + grid.dim_x*grid.dim_z] == 0) {
-                        int v_idx = mesh.vertices.size() / 3;
-                        mesh.vertices.insert(mesh.vertices.end(), {
-                            px, py+s, pz,  px+s, py+s, pz,  px+s, py+s, pz+s,  px, py+s, pz+s
-                        });
-                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+2, v_idx+1, v_idx, v_idx+3, v_idx+2});
-                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
-                    }
-                    // Right Face
-                    if (x == grid.dim_x - 1 || grid.data[idx + 1] == 0) {
-                        int v_idx = mesh.vertices.size() / 3;
-                        mesh.vertices.insert(mesh.vertices.end(), {
-                            px+s, py, pz,  px+s, py+s, pz,  px+s, py+s, pz+s,  px+s, py, pz+s
-                        });
-                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
-                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
-                    }
-                    // Front Face
-                    if (z == grid.dim_z - 1 || grid.data[idx + grid.dim_x] == 0) {
-                        int v_idx = mesh.vertices.size() / 3;
-                        mesh.vertices.insert(mesh.vertices.end(), {
-                            px, py, pz+s,  px+s, py, pz+s,  px+s, py+s, pz+s,  px, py+s, pz+s
-                        });
-                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
-                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
-                    }
-                    // Left Face
-                    if (x == 0 || grid.data[idx - 1] == 0) {
-                        int v_idx = mesh.vertices.size() / 3;
-                        mesh.vertices.insert(mesh.vertices.end(), {
-                            px, py, pz,  px, py, pz+s,  px, py+s, pz+s,  px, py+s, pz
-                        });
-                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
-                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
-                    }
-                    // Back Face
-                    if (z == 0 || grid.data[idx - grid.dim_x] == 0) {
-                        int v_idx = mesh.vertices.size() / 3;
-                        mesh.vertices.insert(mesh.vertices.end(), {
-                            px, py, pz,  px, py+s, pz,  px+s, py+s, pz,  px+s, py, pz
-                        });
-                        mesh.indices.insert(mesh.indices.end(), {v_idx, v_idx+1, v_idx+2, v_idx, v_idx+2, v_idx+3});
-                        mesh.materials.insert(mesh.materials.end(), {grid.data[idx], grid.data[idx]});
-                    }
-                }
-            }
+    int width = grid.dim_x;
+    int depth = grid.dim_z;
+
+    // 1. Generate Vertices (Smooth Heightmap Plane)
+    mesh.vertices.reserve(width * depth * 3);
+    for (int z = 0; z < depth; z++) {
+        for (int x = 0; x < width; x++) {
+            float px = grid.min_x + x * s;
+            float pz = grid.min_z + z * s;
+            float py = surface_heightmap[z * width + x]; // True floating-point altitude
+            mesh.vertices.insert(mesh.vertices.end(), {px, py, pz});
+        }
+    }
+
+    // 2. Generate Indices (Two triangles per grid cell)
+    mesh.indices.reserve((width - 1) * (depth - 1) * 6);
+    for (int z = 0; z < depth - 1; z++) {
+        for (int x = 0; x < width - 1; x++) {
+            int tl = z * width + x;
+            int tr = tl + 1;
+            int bl = (z + 1) * width + x;
+            int br = bl + 1;
+
+            int cls = surface_materials[z * width + x];
+
+            // Triangle 1: Top-Left, Bottom-Left, Top-Right
+            mesh.indices.insert(mesh.indices.end(), {tl, bl, tr});
+            mesh.materials.push_back(cls);
+
+            // Triangle 2: Top-Right, Bottom-Left, Bottom-Right
+            mesh.indices.insert(mesh.indices.end(), {tr, bl, br});
+            mesh.materials.push_back(cls);
         }
     }
 }
@@ -131,7 +108,8 @@ std::vector<float> generate_antenna_texture(float gain_dbi, float horiz_beam, fl
 
 bool build_voxel_grid(
     float center_e, float center_n, float radius, float cell_size,
-    std::vector<uint8_t>& voxel_data, VoxelGrid& grid_info, std::vector<float>& surface_heightmap) 
+    std::vector<uint8_t>& voxel_data, VoxelGrid& grid_info, 
+    std::vector<float>& surface_heightmap, std::vector<int>& surface_materials) 
 {
     sqlite3* db = get_db_connection();
     if (!db) return false;
@@ -175,32 +153,34 @@ bool build_voxel_grid(
     grid_info.dim_y = ceil((max_alt - min_alt) / cell_size) + 1;
 
     voxel_data.assign(grid_info.dim_x * grid_info.dim_y * grid_info.dim_z, 0);
+    surface_heightmap.assign(grid_info.dim_x * grid_info.dim_z, min_alt);
+    surface_materials.assign(grid_info.dim_x * grid_info.dim_z, 1);
     
     for (const auto& p : points) {
         int gx = (p.e - grid_info.min_x) / cell_size;
         int gz = (p.n - grid_info.min_z) / cell_size;
         int gy = (p.a - grid_info.min_y) / cell_size;
         
-        if (gx >= 0 && gx < grid_info.dim_x && gz >= 0 && gz < grid_info.dim_z && gy >= 0 && gy < grid_info.dim_y) {
-            int idx = gy * (grid_info.dim_x * grid_info.dim_z) + gz * grid_info.dim_x + gx;
-            voxel_data[idx] = (p.cls > 0) ? p.cls : 1; 
+        if (gx >= 0 && gx < grid_info.dim_x && gz >= 0 && gz < grid_info.dim_z) {
+            
+            // KEEP: We still build the 3D voxel array because the GPU needs volumetric 
+            // data to calculate foliage penetration/vegetation loss (Weissberger's Model).
+            if (gy >= 0 && gy < grid_info.dim_y) {
+                int idx = gy * (grid_info.dim_x * grid_info.dim_z) + gz * grid_info.dim_x + gx;
+                voxel_data[idx] = (p.cls > 0) ? p.cls : 1; 
+            }
+
+            // FIX: Directly record the true, continuous, unquantized LiDAR height!
+            // We bypass all voxels and steps for the physical geometric mesh.
+            int flat_idx = gz * grid_info.dim_x + gx;
+            if (p.a > surface_heightmap[flat_idx]) {
+                surface_heightmap[flat_idx] = p.a;
+                surface_materials[flat_idx] = (p.cls > 0) ? p.cls : 1;
+            }
         }
     }
 
     grid_info.data = voxel_data.data();
-
-    surface_heightmap.assign(grid_info.dim_x * grid_info.dim_z, min_alt);
-    for (int x = 0; x < grid_info.dim_x; x++) {
-        for (int z = 0; z < grid_info.dim_z; z++) {
-            for (int y = grid_info.dim_y - 1; y >= 0; y--) {
-                int idx = y * (grid_info.dim_x * grid_info.dim_z) + z * grid_info.dim_x + x;
-                if (voxel_data[idx] > 0) {
-                    surface_heightmap[z * grid_info.dim_x + x] = min_alt + (y * cell_size);
-                    break;
-                }
-            }
-        }
-    }
     return true;
 }
 
@@ -435,14 +415,15 @@ int main() {
             std::vector<uint8_t> voxel_data;
             VoxelGrid grid_info;
             std::vector<float> surface_mesh;
+            std::vector<int> surface_materials;
 
-            if (!build_voxel_grid(easting, northing, radius, voxel_res, voxel_data, grid_info, surface_mesh)) {
+            if (!build_voxel_grid(easting, northing, radius, voxel_res, voxel_data, grid_info, surface_mesh, surface_materials)) {
                 return crow::response(400, "No LiDAR points found in this area.");
             }
             
-            // FIX 1 Execution: Generate OptiX Triangle Mesh from Voxels
+            // FIX 1 Execution: Generate OptiX Triangle Mesh from Raw LiDAR Heights
             TriangleMesh optix_mesh;
-            generate_optix_mesh(grid_info, optix_mesh);
+            generate_optix_mesh(grid_info, surface_mesh, surface_materials, optix_mesh);
 
             float center_ground = surface_mesh[(grid_info.dim_z/2) * grid_info.dim_x + (grid_info.dim_x/2)];
 
@@ -484,6 +465,11 @@ int main() {
             res["cell_size"] = grid_info.cell_size;
             res["min_alt"] = grid_info.min_y;
             res["surface_heights"] = surface_mesh;
+            
+            // Expose the raw OptiX hardware mesh vectors to the frontend 
+            res["mesh_vertices"] = optix_mesh.vertices;
+            res["mesh_indices"] = optix_mesh.indices;
+
             res["heatmap_dbm"] = std::vector<float>(rx_power_dbm.begin(), rx_power_dbm.end());
             res["delay_spread_ns"] = std::vector<float>(delay_spread_ns.begin(), delay_spread_ns.end());
 
