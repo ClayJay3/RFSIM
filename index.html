@@ -137,7 +137,7 @@
             </div>
             <div class="control-group">
                 <label>Heatmap Visualizer Mode:</label>
-                <select id="heatmap-mode" onchange="updateHeatmapTexture()">
+                <select id="heatmap-mode" onchange="updateShaderUniforms()">
                     <option value="0">1. Total Incoherent RF Power (dBm)</option>
                     <option value="1">2. Basic Wavefront Reveal</option>
                     <option value="2">3. Live Wave Interference</option>
@@ -423,73 +423,21 @@
             }
         }
 
-        function dbmToColor(dbm) {
-            if (dbm <= -100) return [30, 30, 30, 255]; 
-            let t = Math.max(0, Math.min(1, (dbm + 100) / 60));
-            let r, g, b;
-            if (t < 0.33) { r = 0; g = Math.floor(t * 3 * 255); b = 255; }
-            else if (t < 0.66) { let t2 = (t - 0.33) * 3; r = Math.floor(t2 * 255); g = 255; b = Math.floor((1 - t2) * 255); }
-            else { let t3 = (t - 0.66) * 3; r = 255; g = Math.floor((1 - t3) * 255); b = 0; }
-            return [r, g, b, 255];
+        function updateOpacity(val) {
+            document.getElementById('opacity-val').innerText = val;
+            if (heatmapMesh && heatmapMesh.material) heatmapMesh.material.opacity = parseFloat(val);
+            if (rayLinesMesh && rayLinesMesh.material) rayLinesMesh.material.opacity = Math.min(0.2, parseFloat(val));
         }
 
-        function updateHeatmapTexture() {
-            if (!currentSimData || !heatmapMesh) return;
+        function updateShaderUniforms() {
+            if (!heatmapMesh || !heatmapMesh.material.userData.heatmapMode) return;
             const mode = parseInt(document.getElementById('heatmap-mode').value);
-            const texData = new Uint8Array(currentSimData.grid_w * currentSimData.grid_h * 4);
-            
-            const noiseFloor = parseFloat(document.getElementById('noise_floor').value) || -105;
-            const rxSens = parseFloat(document.getElementById('rx_sens').value) || -100;
-
-            updateLegend(mode);
-
-            for (let i = 0; i < currentSimData.heatmap_dbm.length; i++) {
-                let color = [0,0,0,0]; 
-                let dbm = currentSimData.heatmap_dbm[i];
-                let snr = dbm - noiseFloor;
-
-                if (mode <= 2) {
-                    if (dbm > -119.0) color = dbmToColor(dbm);
-                } else if (mode === 3) {
-                    if (dbm >= rxSens && snr >= 5) { 
-                        let ds = currentSimData.delay_spread_ns[i];
-                        let t = Math.max(0, Math.min(1, ds / 500.0)); 
-                        if (t < 0.5) color = [0, Math.floor(t * 2 * 255), 255 - Math.floor(t * 2 * 100), 255]; 
-                        else color = [Math.floor((t - 0.5) * 2 * 255), 255 - Math.floor((t - 0.5) * 2 * 255), 0, 255];
-                        if (ds <= 0.1) color = [30, 30, 255, 255]; 
-                    } else if (dbm > -119.0) {
-                        color = [50, 50, 50, 150]; 
-                    }
-                } else if (mode === 4) {
-                    if (dbm < rxSens || snr < 5 || dbm <= -119.0) color = [255, 30, 30, 180]; 
-                    else if (snr < 12) color = [255, 165, 0, 255];  
-                    else if (snr < 20) color = [255, 255, 0, 255];  
-                    else if (snr < 28) color = [136, 255, 0, 255];  
-                    else color = [0, 255, 0, 255];                  
-                } else if (mode === 5) {
-                    let ds = currentSimData.delay_spread_ns[i];
-                    if (dbm < rxSens || snr < 5 || dbm <= -119.0) {
-                        color = [255, 30, 30, 200]; 
-                    } else if (ds > 250.0) {
-                        color = [255, 0, 255, 255]; 
-                    } else if (snr < 12) {
-                        color = [255, 165, 0, 200]; 
-                    } else {
-                        color = [0, 255, 0, 80];    
-                    }
-                }
-
-                texData[i * 4] = color[0]; texData[i * 4 + 1] = color[1]; 
-                texData[i * 4 + 2] = color[2]; texData[i * 4 + 3] = color[3];
-            }
-
-            const heatmapTex = new THREE.DataTexture(texData, currentSimData.grid_w, currentSimData.grid_h, THREE.RGBAFormat);
-            heatmapTex.magFilter = THREE.LinearFilter; heatmapTex.minFilter = THREE.LinearFilter;
-            heatmapTex.needsUpdate = true;
-            
-            heatmapMesh.material.map = heatmapTex;
             heatmapMesh.material.userData.heatmapMode.value = mode;
-            if (mode > 0) heatmapMesh.material.userData.time.value = 0; 
+            heatmapMesh.material.userData.noiseFloor.value = parseFloat(document.getElementById('noise_floor').value) || -105;
+            heatmapMesh.material.userData.rxSens.value = parseFloat(document.getElementById('rx_sens').value) || -100;
+            
+            if (mode > 0 && mode < 3) heatmapMesh.material.userData.time.value = 0;
+            updateLegend(mode);
         }
 
         function animate() { 
@@ -531,12 +479,6 @@
         animate();
         
         window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
-
-        function updateOpacity(val) {
-            document.getElementById('opacity-val').innerText = val;
-            if (heatmapMesh && heatmapMesh.material) heatmapMesh.material.opacity = parseFloat(val);
-            if (rayLinesMesh && rayLinesMesh.material) rayLinesMesh.material.opacity = Math.min(0.2, parseFloat(val));
-        }
 
         async function fetchStitchedSatellite(payload, projStr) {
             function lngLatToTile(lng, lat, z) {
@@ -645,31 +587,17 @@
             if (rayLinesMesh) scene.remove(rayLinesMesh);
             if (photonMesh) scene.remove(photonMesh);
 
-            // Replaces the 2.5D PlaneGeometry extrapolation with the actual true 3D Voxel Mesh built for OptiX
-            const geom = new THREE.BufferGeometry();
-            const vertices = new Float32Array(data.mesh_vertices.length);
-            const uvs = new Float32Array((data.mesh_vertices.length / 3) * 2);
-            
-            for (let i = 0; i < data.mesh_vertices.length; i += 3) {
-                const e = data.mesh_vertices[i];
-                const a = data.mesh_vertices[i+1];
-                const n = data.mesh_vertices[i+2];
-                
-                vertices[i] = e - params.easting;
-                vertices[i+1] = a - data.min_alt;
-                vertices[i+2] = -(n - params.northing);
-
-                // Compute UVs for mapping the satellite texture to the arbitrary voxel mesh
-                const u = (e - (params.easting - params.radius)) / (params.radius * 2);
-                const v = (n - (params.northing - params.radius)) / (params.radius * 2);
-                
-                uvs[(i/3)*2] = u;
-                uvs[(i/3)*2+1] = v;
+            const geom = new THREE.PlaneGeometry(params.radius * 2, params.radius * 2, data.grid_w - 1, data.grid_h - 1);
+            geom.rotateX(-Math.PI / 2);
+            const pos = geom.attributes.position.array;
+            for (let row = 0; row < data.grid_h; row++) {
+                for (let col = 0; col < data.grid_w; col++) {
+                    let v_idx = row * data.grid_w + col;
+                    let backend_z = data.grid_h - 1 - row; 
+                    let backend_idx = backend_z * data.grid_w + col;
+                    pos[v_idx * 3 + 1] = data.surface_heights[backend_idx] - data.min_alt;
+                }
             }
-            
-            geom.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-            geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-            geom.setIndex(data.mesh_indices);
             geom.computeVertexNormals();
 
             let satTexture;
@@ -696,67 +624,140 @@
             terrainMesh = new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ map: satTexture, color: 0xffffff, side: THREE.DoubleSide }));
             scene.add(terrainMesh);
 
-            let sources = [], srcDists = [];
-            if (data.ray_paths && data.ray_paths.length > 0) {
-                let txVec = utmToVector3(data.ray_paths[0][0][0], data.ray_paths[0][0][1], data.ray_paths[0][0][2], params, data);
-                sources.push(txVec); srcDists.push(0.0);
-                for (let i = 0; i < data.ray_paths.length; i++) {
-                    if (sources.length >= 16) break;
-                    let path = data.ray_paths[i];
-                    if (path.length > 1) {
-                        let bounceVec = utmToVector3(path[1][0], path[1][1], path[1][2], params, data);
-                        let distinct = true;
-                        for (let s of sources) if (s.distanceTo(bounceVec) < 15.0) { distinct = false; break; }
-                        if (distinct) { sources.push(bounceVec); srcDists.push(txVec.distanceTo(bounceVec)); }
-                    }
-                }
-            } else { sources.push(new THREE.Vector3(0, params.tx_height, 0)); srcDists.push(0); }
-            const activeSourcesCount = sources.length;
-            while (sources.length < 16) { sources.push(new THREE.Vector3(0,0,0)); srcDists.push(0.0); }
+            // Create Data Textures containing the exact physics output from the GPU
+            const phys1Array = new Float32Array(data.grid_w * data.grid_h * 4);
+            const phys2Array = new Float32Array(data.grid_w * data.grid_h * 4);
+            
+            for (let i = 0; i < data.grid_w * data.grid_h; i++) {
+                phys1Array[i*4 + 0] = data.coherent_dbm[i];
+                phys1Array[i*4 + 1] = data.incoherent_dbm[i];
+                phys1Array[i*4 + 2] = data.phase_rad[i];
+                phys1Array[i*4 + 3] = data.tof_ns[i];
+                
+                phys2Array[i*4 + 0] = data.delay_spread_ns[i];
+                phys2Array[i*4 + 1] = 0;
+                phys2Array[i*4 + 2] = 0;
+                phys2Array[i*4 + 3] = 0;
+            }
+
+            const texPhys1 = new THREE.DataTexture(phys1Array, data.grid_w, data.grid_h, THREE.RGBAFormat, THREE.FloatType);
+            const texPhys2 = new THREE.DataTexture(phys2Array, data.grid_w, data.grid_h, THREE.RGBAFormat, THREE.FloatType);
+            texPhys1.magFilter = THREE.LinearFilter; texPhys1.minFilter = THREE.LinearFilter;
+            texPhys2.magFilter = THREE.LinearFilter; texPhys2.minFilter = THREE.LinearFilter;
+            texPhys1.needsUpdate = true; texPhys2.needsUpdate = true;
 
             const heatmapMat = new THREE.MeshPhongMaterial({ 
                 color: 0xffffff, side: THREE.DoubleSide, transparent: true,
                 opacity: parseFloat(document.getElementById('heatmap-opacity').value), depthWrite: false, 
                 polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1
             });
+
             heatmapMat.userData = {
-                time: { value: 0.0 }, heatmapMode: { value: parseInt(document.getElementById('heatmap-mode').value) },
-                sources: { value: sources }, srcDists: { value: srcDists }, numSources: { value: activeSourcesCount }
+                time: { value: 0.0 }, 
+                heatmapMode: { value: parseInt(document.getElementById('heatmap-mode').value) },
+                noiseFloor: { value: parseFloat(document.getElementById('noise_floor').value) || -105 },
+                rxSens: { value: parseFloat(document.getElementById('rx_sens').value) || -100 },
+                texPhys1: { value: texPhys1 },
+                texPhys2: { value: texPhys2 }
             };
+
             heatmapMat.onBeforeCompile = (shader) => {
                 shader.uniforms.time = heatmapMat.userData.time;
                 shader.uniforms.heatmapMode = heatmapMat.userData.heatmapMode;
-                shader.uniforms.sources = heatmapMat.userData.sources;
-                shader.uniforms.srcDists = heatmapMat.userData.srcDists;
-                shader.uniforms.numSources = heatmapMat.userData.numSources;
-                shader.vertexShader = `varying vec3 vLocalPos;\n` + shader.vertexShader;
-                shader.vertexShader = shader.vertexShader.replace(`#include <begin_vertex>`, `#include <begin_vertex>\nvLocalPos = position;`);
-                shader.fragmentShader = `uniform float time;\nuniform float heatmapMode;\nuniform vec3 sources[16];\nuniform float srcDists[16];\nuniform int numSources;\nvarying vec3 vLocalPos;\n` + shader.fragmentShader;
+                shader.uniforms.noiseFloor = heatmapMat.userData.noiseFloor;
+                shader.uniforms.rxSens = heatmapMat.userData.rxSens;
+                shader.uniforms.texPhys1 = heatmapMat.userData.texPhys1;
+                shader.uniforms.texPhys2 = heatmapMat.userData.texPhys2;
+
+                shader.vertexShader = `varying vec2 vPhysUv;\n` + shader.vertexShader;
+                shader.vertexShader = shader.vertexShader.replace(
+                    `#include <begin_vertex>`, 
+                    `#include <begin_vertex>\nvPhysUv = uv;`
+                );
+
+                shader.fragmentShader = `
+                    uniform float time;
+                    uniform float heatmapMode;
+                    uniform float noiseFloor;
+                    uniform float rxSens;
+                    uniform sampler2D texPhys1;
+                    uniform sampler2D texPhys2;
+                    varying vec2 vPhysUv;
+
+                    vec4 dbmToColor(float dbm) {
+                        if (dbm <= -119.0) return vec4(0.0);
+                        if (dbm <= -100.0) return vec4(0.12, 0.12, 0.12, 0.8);
+                        float t = clamp((dbm + 100.0) / 60.0, 0.0, 1.0);
+                        if (t < 0.33) return vec4(0.0, t * 3.0, 1.0, 1.0);
+                        else if (t < 0.66) return vec4((t - 0.33) * 3.0, 1.0, 1.0 - (t - 0.33) * 3.0, 1.0);
+                        else return vec4(1.0, 1.0 - (t - 0.66) * 3.0, 0.0, 1.0);
+                    }
+                ` + shader.fragmentShader;
+
                 shader.fragmentShader = shader.fragmentShader.replace(`#include <map_fragment>`, `
                     #include <map_fragment>
-                    if (heatmapMode > 0.5 && heatmapMode < 1.5) {
-                        float dist = distance(vLocalPos, sources[0]); 
-                        float currentRadius = time * 75.0; 
-                        float mask = smoothstep(currentRadius, currentRadius - 5.0, dist);
-                        float edge = smoothstep(currentRadius - 4.0, currentRadius, dist) * smoothstep(currentRadius + 2.0, currentRadius, dist);
-                        diffuseColor.a *= mask; diffuseColor.rgb += vec3(edge * 1.5);
-                    } else if (heatmapMode > 1.5 && heatmapMode < 2.5) {
-                        float waveSum = 0.0, currentRadius = time * 75.0, k = 6.28318 / 8.0; 
-                        if (distance(vLocalPos, sources[0]) < currentRadius) {
-                            for(int i = 0; i < 16; i++) {
-                                if (i >= numSources) break;
-                                float d = distance(vLocalPos, sources[i]);
-                                if (srcDists[i] + d < currentRadius) waveSum += ((i == 0) ? 1.0 : 0.6) / (d * 0.1 + 1.0) * sin(k * (srcDists[i] + d) - k * currentRadius);
+                    
+                    vec4 phys1 = texture2D(texPhys1, vPhysUv);
+                    vec4 phys2 = texture2D(texPhys2, vPhysUv);
+
+                    float coh = phys1.r;
+                    float incoh = phys1.g;
+                    float phase = phys1.b;
+                    float tof = phys1.a;
+                    float ds = phys2.r;
+
+                    float snr = coh - noiseFloor;
+                    vec4 hmColor = vec4(0.0);
+
+                    if (heatmapMode < 0.5) {
+                        hmColor = dbmToColor(incoh);
+                    } else if (heatmapMode < 1.5) {
+                        float currentTof = time * 2500.0;
+                        float mask = smoothstep(currentTof, currentTof - 100.0, tof);
+                        float edge = smoothstep(currentTof - 50.0, currentTof, tof) * smoothstep(currentTof + 50.0, currentTof, tof);
+                        if (coh > -119.0) {
+                            hmColor = dbmToColor(coh);
+                            hmColor.a *= mask;
+                            hmColor.rgb += vec3(edge * 1.5);
+                        }
+                    } else if (heatmapMode < 2.5) {
+                        if (coh > -119.0) {
+                            float currentTof = time * 2500.0;
+                            if (tof < currentTof) {
+                                float wave = sin(phase - time * 50.0); 
+                                hmColor = dbmToColor(coh);
+                                hmColor.rgb *= clamp((wave * 1.5) + 0.5, 0.0, 2.0);
                             }
-                            diffuseColor.rgb *= clamp((waveSum * 1.5) + 0.5, 0.0, 2.0);
-                        } else diffuseColor.a = 0.0; 
+                        }
+                    } else if (heatmapMode < 3.5) {
+                        if (coh >= rxSens && snr >= 5.0) {
+                            float t = clamp(ds / 500.0, 0.0, 1.0);
+                            if (t < 0.5) hmColor = vec4(0.0, t * 2.0, 1.0 - t * 2.0, 1.0);
+                            else hmColor = vec4((t - 0.5) * 2.0, 1.0 - (t - 0.5) * 2.0, 0.0, 1.0);
+                            if (ds <= 0.1) hmColor = vec4(0.12, 0.12, 1.0, 1.0);
+                        } else if (coh > -119.0) {
+                            hmColor = vec4(0.2, 0.2, 0.2, 0.6);
+                        }
+                    } else if (heatmapMode < 4.5) {
+                        if (coh < rxSens || snr < 5.0 || coh <= -119.0) hmColor = vec4(1.0, 0.12, 0.12, 0.7);
+                        else if (snr < 12.0) hmColor = vec4(1.0, 0.65, 0.0, 1.0);
+                        else if (snr < 20.0) hmColor = vec4(1.0, 1.0, 0.0, 1.0);
+                        else if (snr < 28.0) hmColor = vec4(0.53, 1.0, 0.0, 1.0);
+                        else hmColor = vec4(0.0, 1.0, 0.0, 1.0);
+                    } else {
+                        if (coh < rxSens || snr < 5.0 || coh <= -119.0) hmColor = vec4(1.0, 0.12, 0.12, 0.8);
+                        else if (ds > 250.0) hmColor = vec4(1.0, 0.0, 1.0, 1.0);
+                        else if (snr < 12.0) hmColor = vec4(1.0, 0.65, 0.0, 0.8);
+                        else hmColor = vec4(0.0, 1.0, 0.0, 0.3);
                     }
+
+                    diffuseColor = hmColor;
                 `);
             };
 
             heatmapMesh = new THREE.Mesh(geom, heatmapMat);
             terrainMesh.add(heatmapMesh);
-            updateHeatmapTexture();
+            updateShaderUniforms();
 
             if (data.ray_paths) {
                 const showRays = document.getElementById('viz-rays').checked, linePos = [];

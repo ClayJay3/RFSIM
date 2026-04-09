@@ -86,8 +86,14 @@ std::vector<float> generate_antenna_texture(float gain_dbi, float horiz_beam, fl
     std::vector<float> tex(360 * 180, -30.0f); // Default deep null
     for (int el = 0; el < 180; el++) {
         for (int az = 0; az < 360; az++) {
-            float az_off = std::fmod(az + 180.0f, 360.0f) - 180.0f; // -180 to 180
-            float el_off = el - 90.0f; // -90 to 90
+            
+            // BUGFIX: The GPU hardware texture sampler resolves 'delta_az = 0' (bore-sight alignment) 
+            // to u=0.5 (the exact center of the texture array, or index 180). 
+            // We must place the main lobe offset at exactly az=180 instead of az=0.
+            float az_off = az - 180.0f; 
+            
+            // Similarly, delta_el = 0 resolves to v=0.5 (the exact center of the elevation array, index 90).
+            float el_off = el - 90.0f; 
             
             // Main Lobe
             float h_loss = 12.0f * std::pow(az_off / horiz_beam, 2.0f);
@@ -451,11 +457,14 @@ int main() {
             // FIX 2 Execution: Generate 3D Hardware Antenna Texture Pattern
             std::vector<float> antenna_pattern = generate_antenna_texture(tx_gain, beamwidth, v_beamwidth);
 
-            std::vector<float> rx_power_dbm;
+            std::vector<float> coherent_dbm;
+            std::vector<float> incoherent_dbm;
+            std::vector<float> phase_rad;
+            std::vector<float> tof_ns;
             std::vector<float> delay_spread_ns;
             
             // Pass Mesh and Antenna Pattern into Engine
-            run_rf_simulation(grid_info, optix_mesh, antenna_pattern, params, rx_power_dbm, delay_spread_ns);
+            run_rf_simulation(grid_info, optix_mesh, antenna_pattern, params, coherent_dbm, incoherent_dbm, phase_rad, tof_ns, delay_spread_ns);
 
             std::vector<RayPath> ray_paths = generate_visualization_rays(params, grid_info, voxel_data, 1000);
 
@@ -470,7 +479,10 @@ int main() {
             res["mesh_vertices"] = optix_mesh.vertices;
             res["mesh_indices"] = optix_mesh.indices;
 
-            res["heatmap_dbm"] = std::vector<float>(rx_power_dbm.begin(), rx_power_dbm.end());
+            res["coherent_dbm"] = std::vector<float>(coherent_dbm.begin(), coherent_dbm.end());
+            res["incoherent_dbm"] = std::vector<float>(incoherent_dbm.begin(), incoherent_dbm.end());
+            res["phase_rad"] = std::vector<float>(phase_rad.begin(), phase_rad.end());
+            res["tof_ns"] = std::vector<float>(tof_ns.begin(), tof_ns.end());
             res["delay_spread_ns"] = std::vector<float>(delay_spread_ns.begin(), delay_spread_ns.end());
 
             crow::json::wvalue::list paths_json;

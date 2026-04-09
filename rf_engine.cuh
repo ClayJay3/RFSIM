@@ -45,6 +45,7 @@ struct SimParams {
 
     float* d_rx_grid_re;
     float* d_rx_grid_im;
+    float* d_rx_grid_incoherent_watts;
     
     unsigned long long gas_handle;
     cudaTextureObject_t antenna_tex;
@@ -65,7 +66,10 @@ extern "C" void run_rf_simulation(
     const TriangleMesh& mesh,
     const std::vector<float>& antenna_pattern,
     const SimParams& host_params,
-    std::vector<float>& out_rx_power_dbm,
+    std::vector<float>& out_coherent_dbm,
+    std::vector<float>& out_incoherent_dbm,
+    std::vector<float>& out_phase_rad,
+    std::vector<float>& out_tof_ns,
     std::vector<float>& out_delay_spread_ns
 );
 

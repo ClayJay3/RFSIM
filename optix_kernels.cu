@@ -261,6 +261,7 @@ extern "C" __global__ void __raygen__rg() {
                                 int grid_idx = pz * params.grid_width + px;
                                 atomicAdd(&params.d_rx_grid_re[grid_idx], re);
                                 atomicAdd(&params.d_rx_grid_im[grid_idx], im);
+                                atomicAdd(&params.d_rx_grid_incoherent_watts[grid_idx], splat_watts);
                                 
                                 atomicMinFloat(&launch_params.min_dist_grid[grid_idx], accumulated_dist);
                                 atomicMaxFloat(&launch_params.max_dist_grid[grid_idx], accumulated_dist);

@@ -226,6 +226,7 @@ __global__ void los_diffraction_voxel_kernel(VoxelGrid grid, SimParams params, f
     
     atomicAdd(&params.d_rx_grid_re[grid_idx], re);
     atomicAdd(&params.d_rx_grid_im[grid_idx], im);
+    atomicAdd(&params.d_rx_grid_incoherent_watts[grid_idx], p_rx_watts);
     
     atomicMinFloat(&min_dist_grid[grid_idx], dist);
     atomicMaxFloat(&max_dist_grid[grid_idx], dist);
@@ -239,7 +240,12 @@ static void context_log_cb(unsigned int level, const char* tag, const char* mess
 
 extern "C" void run_rf_simulation(
     const VoxelGrid& grid, const TriangleMesh& mesh, const std::vector<float>& antenna_pattern,
-    const SimParams& host_params, std::vector<float>& out_rx_power_dbm, std::vector<float>& out_delay_spread_ns) 
+    const SimParams& host_params, 
+    std::vector<float>& out_coherent_dbm, 
+    std::vector<float>& out_incoherent_dbm, 
+    std::vector<float>& out_phase_rad, 
+    std::vector<float>& out_tof_ns, 
+    std::vector<float>& out_delay_spread_ns) 
 {
     int grid_size = host_params.grid_width * host_params.grid_height;
     if (grid_size <= 0) throw std::runtime_error("Invalid grid dimensions calculated.");
@@ -250,7 +256,10 @@ extern "C" void run_rf_simulation(
         throw std::runtime_error("Triangle mesh has 0 vertices/triangles! Cannot build OptiX BVH from flat terrain.");
     }
 
-    out_rx_power_dbm.resize(grid_size, -120.0f);
+    out_coherent_dbm.resize(grid_size, -120.0f);
+    out_incoherent_dbm.resize(grid_size, -120.0f);
+    out_phase_rad.resize(grid_size, 0.0f);
+    out_tof_ns.resize(grid_size, 0.0f);
     out_delay_spread_ns.resize(grid_size, 0.0f);
 
     SimParams d_params = host_params;
@@ -277,8 +286,10 @@ extern "C" void run_rf_simulation(
     // --- Allocate Complex Coherent Grids ---
     CUDA_CHECK(cudaMalloc(&d_params.d_rx_grid_re, grid_size * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_params.d_rx_grid_im, grid_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_params.d_rx_grid_incoherent_watts, grid_size * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_params.d_rx_grid_re, 0, grid_size * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_params.d_rx_grid_im, 0, grid_size * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_params.d_rx_grid_incoherent_watts, 0, grid_size * sizeof(float)));
 
     float *d_min_dist, *d_max_dist;
     CUDA_CHECK(cudaMalloc(&d_min_dist, grid_size * sizeof(float)));
@@ -439,30 +450,41 @@ extern "C" void run_rf_simulation(
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // --- COHERENT WAVE RECONSTRUCTION ---
-    std::vector<float> h_re(grid_size), h_im(grid_size), h_min(grid_size), h_max(grid_size);
+    std::vector<float> h_re(grid_size), h_im(grid_size), h_incoh(grid_size), h_min(grid_size), h_max(grid_size);
     CUDA_CHECK(cudaMemcpy(h_re.data(), d_params.d_rx_grid_re, grid_size * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_im.data(), d_params.d_rx_grid_im, grid_size * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_incoh.data(), d_params.d_rx_grid_incoherent_watts, grid_size * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_min.data(), d_min_dist, grid_size * sizeof(float), cudaMemcpyDeviceToHost));
     CUDA_CHECK(cudaMemcpy(h_max.data(), d_max_dist, grid_size * sizeof(float), cudaMemcpyDeviceToHost));
 
     for (int i = 0; i < grid_size; i++) {
         // Fast Fading emerges organically from summing the interference of complex waves
-        float p_watts = (h_re[i] * h_re[i]) + (h_im[i] * h_im[i]);
-        if (p_watts > 1e-15f) {
-            out_rx_power_dbm[i] = 10.0f * log10f(p_watts) + 30.0f; 
-        } else {
-            out_rx_power_dbm[i] = -120.0f;
-        }
+        float re = h_re[i];
+        float im = h_im[i];
+        float p_coh = (re * re) + (im * im);
+        float p_incoh = h_incoh[i];
+
+        if (p_coh > 1e-15f) out_coherent_dbm[i] = 10.0f * log10f(p_coh) + 30.0f; 
+        else out_coherent_dbm[i] = -120.0f;
+        
+        if (p_incoh > 1e-15f) out_incoherent_dbm[i] = 10.0f * log10f(p_incoh) + 30.0f;
+        else out_incoherent_dbm[i] = -120.0f;
+        
+        out_phase_rad[i] = atan2f(im, re);
 
         if (h_max[i] > h_min[i] && h_min[i] < 1e8f) {
             float dist_diff = h_max[i] - h_min[i];
+            out_tof_ns[i] = (h_min[i] / C_LIGHT) * 1e9f;
             out_delay_spread_ns[i] = (dist_diff / C_LIGHT) * 1e9f; 
+        } else if (h_min[i] < 1e8f) {
+            out_tof_ns[i] = (h_min[i] / C_LIGHT) * 1e9f;
+            out_delay_spread_ns[i] = 0.0f;
         }
     }
 
     // Cleanup
     cudaFree(d_grid_data);
-    cudaFree(d_params.d_rx_grid_re); cudaFree(d_params.d_rx_grid_im);
+    cudaFree(d_params.d_rx_grid_re); cudaFree(d_params.d_rx_grid_im); cudaFree(d_params.d_rx_grid_incoherent_watts);
     cudaFree(d_min_dist); cudaFree(d_max_dist);
     cudaFree(d_vertices); cudaFree(d_indices);
     optixPipelineDestroy(pipeline); optixProgramGroupDestroy(raygenPG);
