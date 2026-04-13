@@ -68,28 +68,23 @@
             
             <hr style="border-color:#444; margin:15px 0;">
             
-            <!-- HARDWARE PRESETS -->
             <label style="color: #fff; font-weight: bold; margin-bottom: 8px;">Hardware Configuration</label>
             <div class="control-group">
                 <label>Radio System (TX & RX Hardware)</label>
                 <select id="radio-select" onchange="onRadioChange()">
-                    <!-- Populated via JS -->
-                </select>
+                    </select>
             </div>
             <div class="control-group">
                 <label>Tx Antenna</label>
                 <select id="antenna-select" onchange="onAntennaChange()">
-                    <!-- Populated via JS -->
-                </select>
+                    </select>
             </div>
             <div class="control-group">
                 <label>Rx Antenna</label>
                 <select id="rx-antenna-select" onchange="onRxAntennaChange()">
-                    <!-- Populated via JS -->
-                </select>
+                    </select>
             </div>
 
-            <!-- OVERRIDES -->
             <div class="control-group" style="margin-top:15px;">
                 <label>Tx Frequency (MHz) <span class="preset-badge" id="preset-freq-badge">Auto</span></label>
                 <input type="number" id="freq" value="900">
@@ -140,10 +135,9 @@
                 <select id="heatmap-mode" onchange="updateShaderUniforms()">
                     <option value="0">1. Total Incoherent RF Power (dBm)</option>
                     <option value="1">2. Basic Wavefront Reveal</option>
-                    <option value="2">3. Live Wave Interference</option>
-                    <option value="3">4. Delay Spread Fading (ns)</option>
-                    <option value="4" selected>5. Usable Data Rates (SNR)</option>
-                    <option value="5">6. Deadspot Avoidance Warning</option>
+                    <option value="2">3. Delay Spread Fading (ns)</option>
+                    <option value="3" selected>4. Usable Data Rates (SNR)</option>
+                    <option value="4">5. Deadspot Avoidance Warning</option>
                 </select>
             </div>
             <div class="control-group" style="display: flex; align-items: center; margin-top: 10px;">
@@ -152,6 +146,7 @@
             </div>
 
             <button id="sim-btn" onclick="runSimulation()" style="margin-top: 10px;">Run Volumetric Simulation</button>
+            <button id="pulse-btn" onclick="triggerWavePulse()" style="margin-top: 10px; background: #6a0dad; display: none;">🌊 Send Wave Pulse</button>
             <div id="loading">Voxelizing LiDAR & Raymarching...</div>
             
             <div class="engine-notes">
@@ -180,10 +175,10 @@
         const hardwareConfig = {
             radios: {
                 "RocketM9": { name: "RocketM9", freq: 900, tx_p: 28, rx_sens: -94, noise: -102 },
-                "RocketM2": { name: "RocketM2", freq: 2400, tx_p: 28, rx_sens: -97, noise: -95 }, // 2.4G is usually noisier
+                "RocketM2": { name: "RocketM2", freq: 2400, tx_p: 28, rx_sens: -97, noise: -95 }, 
                 "RocketM3": { name: "RocketM3", freq: 3000, tx_p: 25, rx_sens: -94, noise: -102 },
                 "RocketM365": { name: "RocketM365", freq: 3650, tx_p: 25, rx_sens: -94, noise: -102 },
-                "RocketM5": { name: "RocketM5", freq: 5000, tx_p: 27, rx_sens: -96, noise: -105 } // 5G has lower noise floor
+                "RocketM5": { name: "RocketM5", freq: 5000, tx_p: 27, rx_sens: -96, noise: -105 } 
             },
             antennas: {
                 "RocketM9": [
@@ -327,6 +322,10 @@
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
+        // Wave Equation Globals
+        let simTargetA, simTargetB, simScene, simCamera, simMaterial, simQuad;
+        let isSimInitialized = false;
+
         window.onload = async () => {
             initHardwareDropdowns();
 
@@ -404,19 +403,19 @@
             const bar = document.getElementById('legend-bar');
             const labels = document.getElementById('legend-labels');
             
-            if (mode <= 2) {
+            if (mode <= 1) {
                 title.innerText = "Rx Power (dBm)";
                 bar.style.background = "linear-gradient(to right, transparent, blue, cyan, yellow, red)";
                 labels.innerHTML = "<span>&lt;-100</span><span>-85</span><span>-70</span><span>-55</span><span>&gt;-40</span>";
-            } else if (mode === 3) {
+            } else if (mode === 2) {
                 title.innerText = "Delay Spread (Echo timing)";
                 bar.style.background = "linear-gradient(to right, blue, green, yellow, red)";
                 labels.innerHTML = "<span>LOS</span><span>125ns</span><span>250ns</span><span>375ns</span><span>&gt;500ns</span>";
-            } else if (mode === 4) {
+            } else if (mode === 3) {
                 title.innerText = "Usable Link / Capacity";
                 bar.style.background = "linear-gradient(to right, red, orange, yellow, #88ff00, #00ff00)";
                 labels.innerHTML = "<span>Dropped</span><span>Telem</span><span>Med</span><span>Video</span><span>Max</span>";
-            } else if (mode === 5) {
+            } else if (mode === 4) {
                 title.innerText = "Deadspot Avoidance Warning";
                 bar.style.background = "linear-gradient(to right, red, magenta, orange, rgba(0,255,0,0.8))";
                 labels.innerHTML = "<span>Deadspot</span><span>Echoes</span><span>Weak</span><span>Clear</span>";
@@ -436,8 +435,135 @@
             heatmapMesh.material.userData.noiseFloor.value = parseFloat(document.getElementById('noise_floor').value) || -105;
             heatmapMesh.material.userData.rxSens.value = parseFloat(document.getElementById('rx_sens').value) || -100;
             
-            if (mode > 0 && mode < 3) heatmapMesh.material.userData.time.value = 0;
             updateLegend(mode);
+        }
+
+        function triggerWavePulse() {
+            if (isSimInitialized && simMaterial) {
+                // Record the exact time the button was clicked to trigger the FBO injection packet
+                simMaterial.uniforms.pulseTime.value = performance.now() / 1000.0;
+            }
+        }
+
+        // --- BULLETPROOF FBO FLUID ENGINE ---
+        function initWaveSimulation(data, params) {
+            const w = data.grid_w;
+            const h = data.grid_h;
+
+            if (!simTargetA) {
+                simTargetA = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+                simTargetB = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+                
+                // BUGFIX: Orthographic camera near/far planes were clipping the physics plane on some devices
+                simCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+                simCamera.position.z = 1; // Pull camera back so it flawlessly captures the mesh at z=0
+                
+                simScene = new THREE.Scene();
+                simMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                        texWave: { value: null },
+                        texHeight: { value: null },
+                        txPos: { value: new THREE.Vector2(0.5, 0.5) },
+                        time: { value: 0 },
+                        pulseTime: { value: -999.0 }, // Used by the shockwave trigger button
+                        resolution: { value: new THREE.Vector2(w, h) }
+                    },
+                    vertexShader: `
+                        varying vec2 vUv;
+                        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+                    `,
+                    fragmentShader: `
+                        uniform sampler2D texWave;
+                        uniform sampler2D texHeight;
+                        uniform vec2 txPos;
+                        uniform float time;
+                        uniform float pulseTime;
+                        uniform vec2 resolution;
+                        varying vec2 vUv;
+
+                        void main() {
+                            vec2 px = 1.0 / resolution;
+                            vec4 state = texture2D(texWave, vUv);
+                            float u = state.r;
+                            float u_prev = state.g;
+
+                            // 1. Read neighbor amplitudes
+                            float u_lt = texture2D(texWave, vUv + vec2(-px.x, 0.0)).r;
+                            float u_rt = texture2D(texWave, vUv + vec2(px.x, 0.0)).r;
+                            float u_up = texture2D(texWave, vUv + vec2(0.0, px.y)).r;
+                            float u_dn = texture2D(texWave, vUv + vec2(0.0, -px.y)).r;
+
+                            // 2. Read Terrain Heights from LiDAR map
+                            float h_c = texture2D(texHeight, vUv).r;
+                            float h_l = texture2D(texHeight, vUv + vec2(-px.x, 0.0)).r;
+                            float h_r = texture2D(texHeight, vUv + vec2(px.x, 0.0)).r;
+                            float h_u = texture2D(texHeight, vUv + vec2(0.0, px.y)).r;
+                            float h_d = texture2D(texHeight, vUv + vec2(0.0, -px.y)).r;
+
+                            // 3. Calculate Terrain Slope
+                            float max_slope = max(max(abs(h_c - h_l), abs(h_c - h_r)), max(abs(h_c - h_u), abs(h_c - h_d)));
+
+                            // 4. Wave Speed Modulator (Reflections!)
+                            float c2 = 0.25 * clamp(1.0 - max_slope * 0.1, 0.0, 1.0);
+
+                            // 5. Compute the 2D Laplacian Wave Equation
+                            float laplacian = u_lt + u_rt + u_up + u_dn - 4.0 * u;
+                            float u_new = 2.0 * u - u_prev + c2 * laplacian;
+
+                            // 6. Global Damping ensures the water eventually settles back to perfect stillness
+                            // Slightly lowered friction from 0.995 to 0.998 so waves reach the edges easily!
+                            u_new *= 0.998;
+
+                            // 7. Absorbing Boundary Conditions
+                            float edge_dist = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
+                            if (edge_dist < 0.02) {
+                                u_new *= smoothstep(0.0, 0.02, edge_dist); 
+                            }
+
+                            // 8. ON-DEMAND PULSE INJECTOR (Triggered by the new button)
+                            float dist = distance(vUv, txPos);
+                            float timeSincePulse = time - pulseTime;
+                            
+                            // BUGFIX: Increased the radius of the injection site and duration slightly to guarantee it hits multiple texels!
+                            if (timeSincePulse > 0.0 && timeSincePulse < 0.5) { 
+                                float pulse = sin(timeSincePulse * 40.0);
+                                float weight = smoothstep(0.02, 0.0, dist);
+                                u_new = mix(u_new, pulse, weight * 0.7);
+                            }
+
+                            // 9. Safety clamp
+                            u_new = clamp(u_new, -2.0, 2.0);
+
+                            gl_FragColor = vec4(u_new, u, 0.0, 1.0);
+                        }
+                    `
+                });
+                simQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), simMaterial);
+                simScene.add(simQuad);
+            } else {
+                simTargetA.setSize(w, h);
+                simTargetB.setSize(w, h);
+                simMaterial.uniforms.resolution.value.set(w, h);
+            }
+
+            const heightArray = new Float32Array(w * h * 4);
+            for (let i = 0; i < w * h; i++) {
+                heightArray[i*4] = data.surface_heights[i];
+            }
+            const texHeight = new THREE.DataTexture(heightArray, w, h, THREE.RGBAFormat, THREE.FloatType);
+            texHeight.magFilter = THREE.NearestFilter; texHeight.minFilter = THREE.NearestFilter;
+            texHeight.needsUpdate = true;
+            simMaterial.uniforms.texHeight.value = texHeight;
+            
+            renderer.setRenderTarget(simTargetA); renderer.clear();
+            renderer.setRenderTarget(simTargetB); renderer.clear();
+            renderer.setRenderTarget(null);
+
+            simMaterial.uniforms.txPos.value.set(0.5, 0.5); 
+            isSimInitialized = true;
+            
+            // Show the pulse button now that the physics solver is loaded
+            document.getElementById('pulse-btn').style.display = 'block';
         }
 
         function animate() { 
@@ -445,7 +571,7 @@
             controls.update(); 
             
             if (photonMesh && activeRays.length > 0) {
-                const t = (Date.now() / 1000); 
+                const t = performance.now() / 1000.0; 
                 const speed = 250; 
                 for (let i = 0; i < activeRays.length; i++) {
                     const ray = activeRays[i];
@@ -470,9 +596,29 @@
                 photonMesh.instanceMatrix.needsUpdate = true;
             }
 
-            if (heatmapMesh && heatmapMesh.material.userData.time) {
-                const mode = heatmapMesh.material.userData.heatmapMode.value;
-                if (mode > 0 && mode < 3) heatmapMesh.material.userData.time.value = (Date.now() % 10000) / 1000.0;
+            if (isSimInitialized && simMaterial) {
+                const continuousTime = performance.now() / 1000.0;
+                
+                // 1. Advance the background FBO physics independently of the visualizer mode
+                simMaterial.uniforms.time.value = continuousTime;
+                simMaterial.uniforms.texWave.value = simTargetA.texture;
+                
+                renderer.setRenderTarget(simTargetB);
+                renderer.render(simScene, simCamera);
+                renderer.setRenderTarget(null);
+
+                let temp = simTargetA;
+                simTargetA = simTargetB;
+                simTargetB = temp;
+                
+                if (heatmapMesh) {
+                    const mode = heatmapMesh.material.userData.heatmapMode.value;
+                    const wrappingTime = (Date.now() % 10000) / 1000.0;
+                    heatmapMesh.material.userData.time.value = (mode === 1) ? wrappingTime : continuousTime;
+                    
+                    // Attach the live physics output to the visualizer
+                    heatmapMesh.material.userData.texWave.value = simTargetA.texture;
+                }
             }
             renderer.render(scene, camera); 
         }
@@ -536,6 +682,8 @@
 
         async function runSimulation() {
             document.getElementById('loading').style.display = 'block';
+            document.getElementById('pulse-btn').style.display = 'none'; // Hide pulse until ready
+            
             if (rxMarker) { scene.remove(rxMarker); rxMarker = null; }
             if (fresnelMesh) { scene.remove(fresnelMesh); fresnelMesh = null; }
 
@@ -624,7 +772,6 @@
             terrainMesh = new THREE.Mesh(geom, new THREE.MeshPhongMaterial({ map: satTexture, color: 0xffffff, side: THREE.DoubleSide }));
             scene.add(terrainMesh);
 
-            // Create Data Textures containing the exact physics output from the GPU
             const phys1Array = new Float32Array(data.grid_w * data.grid_h * 4);
             const phys2Array = new Float32Array(data.grid_w * data.grid_h * 4);
             
@@ -646,6 +793,9 @@
             texPhys2.magFilter = THREE.LinearFilter; texPhys2.minFilter = THREE.LinearFilter;
             texPhys1.needsUpdate = true; texPhys2.needsUpdate = true;
 
+            const dummyWaveTex = new THREE.DataTexture(new Float32Array([0,0,0,0]), 1, 1, THREE.RGBAFormat, THREE.FloatType);
+            dummyWaveTex.magFilter = THREE.NearestFilter; dummyWaveTex.minFilter = THREE.NearestFilter; dummyWaveTex.needsUpdate = true;
+
             const heatmapMat = new THREE.MeshPhongMaterial({ 
                 color: 0xffffff, side: THREE.DoubleSide, transparent: true,
                 opacity: parseFloat(document.getElementById('heatmap-opacity').value), depthWrite: false, 
@@ -658,7 +808,8 @@
                 noiseFloor: { value: parseFloat(document.getElementById('noise_floor').value) || -105 },
                 rxSens: { value: parseFloat(document.getElementById('rx_sens').value) || -100 },
                 texPhys1: { value: texPhys1 },
-                texPhys2: { value: texPhys2 }
+                texPhys2: { value: texPhys2 },
+                texWave: { value: dummyWaveTex } 
             };
 
             heatmapMat.onBeforeCompile = (shader) => {
@@ -668,6 +819,7 @@
                 shader.uniforms.rxSens = heatmapMat.userData.rxSens;
                 shader.uniforms.texPhys1 = heatmapMat.userData.texPhys1;
                 shader.uniforms.texPhys2 = heatmapMat.userData.texPhys2;
+                shader.uniforms.texWave = heatmapMat.userData.texWave;
 
                 shader.vertexShader = `varying vec2 vPhysUv;\n` + shader.vertexShader;
                 shader.vertexShader = shader.vertexShader.replace(
@@ -682,6 +834,7 @@
                     uniform float rxSens;
                     uniform sampler2D texPhys1;
                     uniform sampler2D texPhys2;
+                    uniform sampler2D texWave;
                     varying vec2 vPhysUv;
 
                     vec4 dbmToColor(float dbm) {
@@ -709,9 +862,10 @@
                     float snr = coh - noiseFloor;
                     vec4 hmColor = vec4(0.0);
 
-                    if (heatmapMode < 0.5) {
+                    // Re-indexed modes since we removed the dedicated Wave option
+                    if (heatmapMode < 0.5) { // Mode 0: Incoherent DBm
                         hmColor = dbmToColor(incoh);
-                    } else if (heatmapMode < 1.5) {
+                    } else if (heatmapMode < 1.5) { // Mode 1: Basic Wavefront Reveal
                         float currentTof = time * 2500.0;
                         float mask = smoothstep(currentTof, currentTof - 100.0, tof);
                         float edge = smoothstep(currentTof - 50.0, currentTof, tof) * smoothstep(currentTof + 50.0, currentTof, tof);
@@ -720,16 +874,7 @@
                             hmColor.a *= mask;
                             hmColor.rgb += vec3(edge * 1.5);
                         }
-                    } else if (heatmapMode < 2.5) {
-                        if (coh > -119.0) {
-                            float currentTof = time * 2500.0;
-                            if (tof < currentTof) {
-                                float wave = sin(phase - time * 50.0); 
-                                hmColor = dbmToColor(coh);
-                                hmColor.rgb *= clamp((wave * 1.5) + 0.5, 0.0, 2.0);
-                            }
-                        }
-                    } else if (heatmapMode < 3.5) {
+                    } else if (heatmapMode < 2.5) { // Mode 2: Delay Spread Fading
                         if (coh >= rxSens && snr >= 5.0) {
                             float t = clamp(ds / 500.0, 0.0, 1.0);
                             if (t < 0.5) hmColor = vec4(0.0, t * 2.0, 1.0 - t * 2.0, 1.0);
@@ -738,17 +883,34 @@
                         } else if (coh > -119.0) {
                             hmColor = vec4(0.2, 0.2, 0.2, 0.6);
                         }
-                    } else if (heatmapMode < 4.5) {
+                    } else if (heatmapMode < 3.5) { // Mode 3: Usable Data Rates (SNR)
                         if (coh < rxSens || snr < 5.0 || coh <= -119.0) hmColor = vec4(1.0, 0.12, 0.12, 0.7);
                         else if (snr < 12.0) hmColor = vec4(1.0, 0.65, 0.0, 1.0);
                         else if (snr < 20.0) hmColor = vec4(1.0, 1.0, 0.0, 1.0);
                         else if (snr < 28.0) hmColor = vec4(0.53, 1.0, 0.0, 1.0);
                         else hmColor = vec4(0.0, 1.0, 0.0, 1.0);
-                    } else {
+                    } else { // Mode 4: Deadspot Avoidance Warning
                         if (coh < rxSens || snr < 5.0 || coh <= -119.0) hmColor = vec4(1.0, 0.12, 0.12, 0.8);
                         else if (ds > 250.0) hmColor = vec4(1.0, 0.0, 1.0, 1.0);
                         else if (snr < 12.0) hmColor = vec4(1.0, 0.65, 0.0, 0.8);
                         else hmColor = vec4(0.0, 1.0, 0.0, 0.3);
+                    }
+
+                    // --- OVERLAY PHYSICAL RIPPLES ---
+                    // Applies the triggered shockwave as a 3D embossed shadow over ANY selected heatmap mode!
+                    if (coh > -120.0) {
+                        float wave = texture2D(texWave, vPhysUv).r; 
+                        float dist = distance(vPhysUv, vec2(0.5, 0.5));
+                        float rf_mask = smoothstep(-115.0, -90.0, incoh);
+                        rf_mask = max(rf_mask, smoothstep(0.1, 0.0, dist)); 
+                        
+                        // BUGFIX: Automatic Visual Gain Control
+                        // We multiply the raw wave by 50.0 so even if the math energy decays 
+                        // down to 0.02 at the edge of the map, it will STILL render as a full 1.0 visual multiplier!
+                        float ripple = clamp(wave * 50.0, -1.0, 1.0) * rf_mask;
+                        
+                        // Apply intense contrast shadow/highlight from the ripple
+                        hmColor.rgb *= clamp(1.0 + ripple * 0.75, 0.2, 2.0);
                     }
 
                     diffuseColor = hmColor;
@@ -758,6 +920,9 @@
             heatmapMesh = new THREE.Mesh(geom, heatmapMat);
             terrainMesh.add(heatmapMesh);
             updateShaderUniforms();
+
+            // Ignite the FBO physics engine so it's ready and waiting for triggers!
+            initWaveSimulation(data, params);
 
             if (data.ray_paths) {
                 const showRays = document.getElementById('viz-rays').checked, linePos = [];
