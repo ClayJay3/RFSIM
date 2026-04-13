@@ -325,6 +325,7 @@
         // Wave Equation Globals
         let simTargetA, simTargetB, simScene, simCamera, simMaterial, simQuad;
         let isSimInitialized = false;
+        let simResetFrames = 0;
 
         window.onload = async () => {
             initHardwareDropdowns();
@@ -440,7 +441,6 @@
 
         function triggerWavePulse() {
             if (isSimInitialized && simMaterial) {
-                // Record the exact time the button was clicked to trigger the FBO injection packet
                 simMaterial.uniforms.pulseTime.value = performance.now() / 1000.0;
             }
         }
@@ -454,9 +454,8 @@
                 simTargetA = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
                 simTargetB = new THREE.WebGLRenderTarget(w, h, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
                 
-                // BUGFIX: Orthographic camera near/far planes were clipping the physics plane on some devices
                 simCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-                simCamera.position.z = 1; // Pull camera back so it flawlessly captures the mesh at z=0
+                simCamera.position.z = 1;
                 
                 simScene = new THREE.Scene();
                 simMaterial = new THREE.ShaderMaterial({
@@ -465,8 +464,9 @@
                         texHeight: { value: null },
                         txPos: { value: new THREE.Vector2(0.5, 0.5) },
                         time: { value: 0 },
-                        pulseTime: { value: -999.0 }, // Used by the shockwave trigger button
-                        resolution: { value: new THREE.Vector2(w, h) }
+                        pulseTime: { value: -999.0 },
+                        resolution: { value: new THREE.Vector2(w, h) },
+                        resetFrame: { value: 0.0 }
                     },
                     vertexShader: `
                         varying vec2 vUv;
@@ -479,9 +479,15 @@
                         uniform float time;
                         uniform float pulseTime;
                         uniform vec2 resolution;
+                        uniform float resetFrame;
                         varying vec2 vUv;
 
                         void main() {
+                            if (resetFrame > 0.5) {
+                                gl_FragColor = vec4(0.0);
+                                return;
+                            }
+
                             vec2 px = 1.0 / resolution;
                             vec4 state = texture2D(texWave, vUv);
                             float u = state.r;
@@ -503,7 +509,7 @@
                             // 3. Calculate Terrain Slope
                             float max_slope = max(max(abs(h_c - h_l), abs(h_c - h_r)), max(abs(h_c - h_u), abs(h_c - h_d)));
 
-                            // 4. Wave Speed Modulator (Reflections!)
+                            // 4. Wave Speed Modulator
                             float c2 = 0.25 * clamp(1.0 - max_slope * 0.1, 0.0, 1.0);
 
                             // 5. Compute the 2D Laplacian Wave Equation
@@ -511,20 +517,26 @@
                             float u_new = 2.0 * u - u_prev + c2 * laplacian;
 
                             // 6. Global Damping ensures the water eventually settles back to perfect stillness
-                            // Slightly lowered friction from 0.995 to 0.998 so waves reach the edges easily!
                             u_new *= 0.998;
 
-                            // 7. Absorbing Boundary Conditions
+                            // 7. Advanced Sponge Layer (Zero-Reflection)
+                            // Progressively dampen the wave as it gets within 10% of the edges.
+                            // CRITICAL FIX: We must dampen BOTH the new position (u_new) AND the previous position (u). 
+                            // This smoothly drains the momentum/velocity of the wave at the same exact rate as the amplitude. 
+                            // If we only damped u_new, the mathematical 'spring' would snap backwards and cause a reflection.
                             float edge_dist = min(min(vUv.x, 1.0 - vUv.x), min(vUv.y, 1.0 - vUv.y));
-                            if (edge_dist < 0.02) {
-                                u_new *= smoothstep(0.0, 0.02, edge_dist); 
-                            }
+                            float sponge = clamp(edge_dist / 0.10, 0.0, 1.0);
+                            
+                            // Calculate a perfectly smooth friction curve (1.0 at center, drops heavily to 0.90 at the border)
+                            float damp = mix(0.90, 1.0, smoothstep(0.0, 1.0, sponge));
+                            
+                            u_new *= damp;
+                            u *= damp; 
 
-                            // 8. ON-DEMAND PULSE INJECTOR (Triggered by the new button)
+                            // 8. ON-DEMAND PULSE INJECTOR 
                             float dist = distance(vUv, txPos);
                             float timeSincePulse = time - pulseTime;
                             
-                            // BUGFIX: Increased the radius of the injection site and duration slightly to guarantee it hits multiple texels!
                             if (timeSincePulse > 0.0 && timeSincePulse < 0.5) { 
                                 float pulse = sin(timeSincePulse * 40.0);
                                 float weight = smoothstep(0.02, 0.0, dist);
@@ -555,14 +567,23 @@
             texHeight.needsUpdate = true;
             simMaterial.uniforms.texHeight.value = texHeight;
             
-            renderer.setRenderTarget(simTargetA); renderer.clear();
-            renderer.setRenderTarget(simTargetB); renderer.clear();
+            // Force hardware clear to black to prevent VRAM garbage
+            const oldClearColor = new THREE.Color();
+            renderer.getClearColor(oldClearColor);
+            const oldClearAlpha = renderer.getClearAlpha();
+            
+            renderer.setClearColor(0x000000, 0.0);
+            renderer.setRenderTarget(simTargetA); renderer.clear(true, true, true);
+            renderer.setRenderTarget(simTargetB); renderer.clear(true, true, true);
+            renderer.setClearColor(oldClearColor, oldClearAlpha);
             renderer.setRenderTarget(null);
 
             simMaterial.uniforms.txPos.value.set(0.5, 0.5); 
+            
+            // Mathematically zero out the fluid FBOs for 2 frames
+            simResetFrames = 2; 
             isSimInitialized = true;
             
-            // Show the pulse button now that the physics solver is loaded
             document.getElementById('pulse-btn').style.display = 'block';
         }
 
@@ -597,9 +618,15 @@
             }
 
             if (isSimInitialized && simMaterial) {
+                if (simResetFrames > 0) {
+                    simMaterial.uniforms.resetFrame.value = 1.0;
+                    simResetFrames--;
+                } else {
+                    simMaterial.uniforms.resetFrame.value = 0.0;
+                }
+
                 const continuousTime = performance.now() / 1000.0;
                 
-                // 1. Advance the background FBO physics independently of the visualizer mode
                 simMaterial.uniforms.time.value = continuousTime;
                 simMaterial.uniforms.texWave.value = simTargetA.texture;
                 
@@ -616,7 +643,6 @@
                     const wrappingTime = (Date.now() % 10000) / 1000.0;
                     heatmapMesh.material.userData.time.value = (mode === 1) ? wrappingTime : continuousTime;
                     
-                    // Attach the live physics output to the visualizer
                     heatmapMesh.material.userData.texWave.value = simTargetA.texture;
                 }
             }
@@ -682,7 +708,7 @@
 
         async function runSimulation() {
             document.getElementById('loading').style.display = 'block';
-            document.getElementById('pulse-btn').style.display = 'none'; // Hide pulse until ready
+            document.getElementById('pulse-btn').style.display = 'none'; 
             
             if (rxMarker) { scene.remove(rxMarker); rxMarker = null; }
             if (fresnelMesh) { scene.remove(fresnelMesh); fresnelMesh = null; }
@@ -862,7 +888,6 @@
                     float snr = coh - noiseFloor;
                     vec4 hmColor = vec4(0.0);
 
-                    // Re-indexed modes since we removed the dedicated Wave option
                     if (heatmapMode < 0.5) { // Mode 0: Incoherent DBm
                         hmColor = dbmToColor(incoh);
                     } else if (heatmapMode < 1.5) { // Mode 1: Basic Wavefront Reveal
@@ -897,19 +922,14 @@
                     }
 
                     // --- OVERLAY PHYSICAL RIPPLES ---
-                    // Applies the triggered shockwave as a 3D embossed shadow over ANY selected heatmap mode!
                     if (coh > -120.0) {
                         float wave = texture2D(texWave, vPhysUv).r; 
                         float dist = distance(vPhysUv, vec2(0.5, 0.5));
                         float rf_mask = smoothstep(-115.0, -90.0, incoh);
                         rf_mask = max(rf_mask, smoothstep(0.1, 0.0, dist)); 
                         
-                        // BUGFIX: Automatic Visual Gain Control
-                        // We multiply the raw wave by 50.0 so even if the math energy decays 
-                        // down to 0.02 at the edge of the map, it will STILL render as a full 1.0 visual multiplier!
                         float ripple = clamp(wave * 50.0, -1.0, 1.0) * rf_mask;
                         
-                        // Apply intense contrast shadow/highlight from the ripple
                         hmColor.rgb *= clamp(1.0 + ripple * 0.75, 0.2, 2.0);
                     }
 
@@ -921,7 +941,6 @@
             terrainMesh.add(heatmapMesh);
             updateShaderUniforms();
 
-            // Ignite the FBO physics engine so it's ready and waiting for triggers!
             initWaveSimulation(data, params);
 
             if (data.ray_paths) {
